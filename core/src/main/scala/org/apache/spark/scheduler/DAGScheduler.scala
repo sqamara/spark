@@ -576,7 +576,6 @@ class DAGScheduler(
       // Return immediately if the job is running 0 tasks
       return new JobWaiter[U](this, jobId, 0, resultHandler)
     }
-
     assert(partitions.size > 0)
     val func2 = func.asInstanceOf[(TaskContext, Iterator[_]) => _]
     val waiter = new JobWaiter(this, jobId, partitions.size, resultHandler)
@@ -1133,6 +1132,13 @@ class DAGScheduler(
       // Skip all the actions if the stage has been cancelled.
       return
     }
+
+    logError("TASK PASSED")
+    logError("stageID:" + stageId)
+    logError("taskType:" + taskType)
+    logError("event.reason:" + event.reason)
+    logError("event.taskInfo:" + event.taskInfo)
+    logError("event.taskMetrics:" + event.taskMetrics)
 
     val stage = stageIdToStage(task.stageId)
     event.reason match {

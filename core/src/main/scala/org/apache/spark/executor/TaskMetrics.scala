@@ -101,6 +101,17 @@ class TaskMetrics extends Serializable {
   private[spark] def incDiskBytesSpilled(value: Long): Unit = _diskBytesSpilled += value
   private[spark] def decDiskBytesSpilled(value: Long): Unit = _diskBytesSpilled -= value
 
+
+  override def toString(): String = { "\n" + 
+    "_hostname               : " + hostname                + "\n" +   
+    "_executorDeserializeTime: " + executorDeserializeTime + "\n" +  
+    "_executorRunTime:       : " + executorRunTime         + "\n" +  
+    "_resultSize             : " + resultSize              + "\n" +  
+    "_jvmGCTime              : " + jvmGCTime               + "\n" +   
+    "_resultSerializationTime: " + resultSerializationTime + "\n" +  
+    "_memoryBytesSpilled     : " + memoryBytesSpilled      + "\n" +   
+    "_diskBytesSpilled       : " + diskBytesSpilled        + "\n"
+  }
   /**
    * If this task reads from a HadoopRDD or from persisted data, metrics on how much data was read
    * are stored here.

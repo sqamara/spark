@@ -1,0 +1,114 @@
+Loading my_dev/test/word_count_for_shell...
+16/07/21 10:24:12 INFO DAGScheduler: Registering RDD 3 (map at <console>:28)
+16/07/21 10:24:12 INFO DAGScheduler: Got job 0 (collect at <console>:28) with 2 output partitions
+16/07/21 10:24:12 INFO DAGScheduler: Final stage: ResultStage 1 (collect at <console>:28)
+16/07/21 10:24:12 INFO DAGScheduler: Parents of final stage: List(ShuffleMapStage 0)
+16/07/21 10:24:12 INFO DAGScheduler: Missing parents: List(ShuffleMapStage 0)
+16/07/21 10:24:12 INFO DAGScheduler: Submitting ShuffleMapStage 0 (MapPartitionsRDD[3] at map at <console>:28), which has no missing parents
+[Stage 0:>                                                          (0 + 0) / 2]16/07/21 10:24:12 INFO DAGScheduler: Submitting 2 missing tasks from ShuffleMapStage 0 (MapPartitionsRDD[3] at map at <console>:28)
+[Stage 0:>                                                          (0 + 2) / 2]16/07/21 10:24:13 ERROR DAGScheduler: TASK PASSED
+16/07/21 10:24:13 ERROR DAGScheduler: stageID:0
+16/07/21 10:24:13 ERROR DAGScheduler: taskType:ShuffleMapTask
+16/07/21 10:24:13 ERROR DAGScheduler: event.reason:Success
+16/07/21 10:24:13 ERROR DAGScheduler: event.taskInfo:
+taskId       : 1
+index        : 1
+attemptNumber: 0
+launchTime   : 1469067852895
+executorId   : driver
+host         : localhost
+taskLocality : PROCESS_LOCAL
+speculative  : false
+
+16/07/21 10:24:13 ERROR DAGScheduler: event.taskMetrics:
+_hostname               : localhost
+_executorDeserializeTime: 108
+_executorRunTime:       : 623
+_resultSize             : 2254
+_jvmGCTime              : 0
+_resultSerializationTime: 12
+_memoryBytesSpilled     : 0
+_diskBytesSpilled       : 0
+
+16/07/21 10:24:14 ERROR DAGScheduler: TASK PASSED
+16/07/21 10:24:14 ERROR DAGScheduler: stageID:0
+16/07/21 10:24:14 ERROR DAGScheduler: taskType:ShuffleMapTask
+16/07/21 10:24:14 ERROR DAGScheduler: event.reason:Success
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskInfo:
+taskId       : 0
+index        : 0
+attemptNumber: 0
+launchTime   : 1469067852738
+executorId   : driver
+host         : localhost
+taskLocality : PROCESS_LOCAL
+speculative  : false
+
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskMetrics:
+_hostname               : localhost
+_executorDeserializeTime: 108
+_executorRunTime:       : 623
+_resultSize             : 2254
+_jvmGCTime              : 0
+_resultSerializationTime: 12
+_memoryBytesSpilled     : 0
+_diskBytesSpilled       : 0
+
+16/07/21 10:24:14 INFO DAGScheduler: ShuffleMapStage 0 (map at <console>:28) finished in 1.372 s
+16/07/21 10:24:14 INFO DAGScheduler: looking for newly runnable stages
+16/07/21 10:24:14 INFO DAGScheduler: running: Set()
+16/07/21 10:24:14 INFO DAGScheduler: waiting: Set(ResultStage 1)
+16/07/21 10:24:14 INFO DAGScheduler: failed: Set()
+16/07/21 10:24:14 INFO DAGScheduler: Submitting ResultStage 1 (ShuffledRDD[4] at reduceByKey at <console>:28), which has no missing parents
+16/07/21 10:24:14 INFO DAGScheduler: Submitting 2 missing tasks from ResultStage 1 (ShuffledRDD[4] at reduceByKey at <console>:28)
+[Stage 0:=============================>                             (1 + 1) / 2]
+16/07/21 10:24:14 ERROR DAGScheduler: TASK PASSED
+16/07/21 10:24:14 ERROR DAGScheduler: stageID:1
+16/07/21 10:24:14 ERROR DAGScheduler: taskType:ResultTask
+16/07/21 10:24:14 ERROR DAGScheduler: event.reason:Success
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskInfo:
+taskId       : 2
+index        : 0
+attemptNumber: 0
+launchTime   : 1469067854131
+executorId   : driver
+host         : localhost
+taskLocality : NODE_LOCAL
+speculative  : false
+
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskMetrics:
+_hostname               : localhost
+_executorDeserializeTime: 4
+_executorRunTime:       : 267
+_resultSize             : 4356
+_jvmGCTime              : 0
+_resultSerializationTime: 2
+_memoryBytesSpilled     : 0
+_diskBytesSpilled       : 0
+
+16/07/21 10:24:14 ERROR DAGScheduler: TASK PASSED
+16/07/21 10:24:14 ERROR DAGScheduler: stageID:1
+16/07/21 10:24:14 ERROR DAGScheduler: taskType:ResultTask
+16/07/21 10:24:14 ERROR DAGScheduler: event.reason:Success
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskInfo:
+taskId       : 3
+index        : 1
+attemptNumber: 0
+launchTime   : 1469067854149
+executorId   : driver
+host         : localhost
+taskLocality : NODE_LOCAL
+speculative  : false
+
+16/07/21 10:24:14 ERROR DAGScheduler: event.taskMetrics:
+_hostname               : localhost
+_executorDeserializeTime: 4
+_executorRunTime:       : 269
+_resultSize             : 4203
+_jvmGCTime              : 0
+_resultSerializationTime: 3
+_memoryBytesSpilled     : 0
+_diskBytesSpilled       : 0
+
+16/07/21 10:24:14 INFO DAGScheduler: ResultStage 1 (collect at <console>:28) finished in 0.303 s
+16/07/21 10:24:14 INFO DAGScheduler: Job 0 finished: collect at <console>:28, took 2.534569 s

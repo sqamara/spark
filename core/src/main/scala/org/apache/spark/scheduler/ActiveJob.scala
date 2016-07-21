@@ -61,4 +61,12 @@ private[spark] class ActiveJob(
   val finished = Array.fill[Boolean](numPartitions)(false)
 
   var numFinished = 0
+
+  override def toString(): String = { "\n" +
+    "jobId     : " + jobId      + "\n" +
+    "finalStage: " + finalStage + "\n" +
+    "callSite  : " + callSite   + "\n" +
+    "listener  : " + listener   + "\n" +
+    "properties: " + properties + "\n"
+  }
 }

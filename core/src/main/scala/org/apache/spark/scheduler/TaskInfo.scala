@@ -57,7 +57,16 @@ class TaskInfo(
   var finishTime: Long = 0
 
   var failed = false
-
+  override def toString(): String = { "\n" +
+    "taskId       : " + taskId        + "\n" + 
+    "index        : " + index         + "\n" +       
+    "attemptNumber: " + attemptNumber + "\n" +  
+    "launchTime   : " + launchTime    + "\n" +   
+    "executorId   : " + executorId    + "\n" +    
+    "host         : " + host          + "\n" +  
+    "taskLocality : " + taskLocality  + "\n" + 
+    "speculative  : " + speculative   + "\n"
+  }
   private[spark] def markGettingResult(time: Long = System.currentTimeMillis) {
     gettingResultTime = time
   }
