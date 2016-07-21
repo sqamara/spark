@@ -1,0 +1,5 @@
+val rdd_1 = sc.parallelize(Array(1,2,3)).map(i => ("sum", i)).reduceByKey(_+_)
+val rdd_2 = sc.parallelize(Array(4,5,6))
+
+rdd_1.collect
+rdd_2.collect

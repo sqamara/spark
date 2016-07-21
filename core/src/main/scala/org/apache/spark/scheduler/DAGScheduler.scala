@@ -130,6 +130,8 @@ class DAGScheduler(
 
   def this(sc: SparkContext) = this(sc, sc.taskScheduler)
 
+  val jobsGraph: JobsGraph = new JobsGraph()
+
   private[spark] val metricsSource: DAGSchedulerSource = new DAGSchedulerSource(this)
 
   private[scheduler] val nextJobId = new AtomicInteger(0)
@@ -572,6 +574,9 @@ class DAGScheduler(
     }
 
     val jobId = nextJobId.getAndIncrement()
+
+    jobsGraph.addJobTaskGraph(new JobTaskGraph(jobId))
+
     if (partitions.size == 0) {
       // Return immediately if the job is running 0 tasks
       return new JobWaiter[U](this, jobId, 0, resultHandler)
@@ -1141,6 +1146,11 @@ class DAGScheduler(
     logError("event.taskMetrics:" + event.taskMetrics)
 
     val stage = stageIdToStage(task.stageId)
+    // TODO: a stage contains a hashset of multiple jobs that depend on it, so multiple nodes should be created
+    jobsGraph.addTask(stage.firstJobId, new TaskNode(stage.rdd.id, event.taskInfo.taskId.toInt, stageId, event.taskInfo.index, event.taskMetrics))
+    logError("stage.firstJobId:" + stage.firstJobId)
+
+
     event.reason match {
       case Success =>
         listenerBus.post(SparkListenerTaskEnd(stageId, stage.latestInfo.attemptId, taskType,
@@ -1670,4 +1680,60 @@ private[spark] object DAGScheduler {
   // this is a simplistic way to avoid resubmitting tasks in the non-fetchable map stage one by one
   // as more failure events come in
   val RESUBMIT_TIMEOUT = 200
+
 }
+
+
+
+/* building a dag of tasks */
+import scala.collection.mutable.ListBuffer
+
+class TaskNode(val rddId: Int, val taskId: Int, val stageId: Int, val partitionIndex: Int, val metrics: TaskMetrics) {
+  override def toString(): String = {
+    "\t\tTaskNode: " + "taskId " + taskId + ", stageId " + stageId + ", partitionIndex " + partitionIndex
+  }
+}
+
+// TODO: replace this ListBuffer with a set because if 2 or more jobs are dependent on a task
+// it will be added multiple times to this JobTask because of @1148
+class JobTaskGraph(val jobId: Int) {
+  
+  var nodes: ListBuffer[TaskNode] = ListBuffer[TaskNode]()
+  
+  def addTask(taskNode: TaskNode) {
+    nodes += taskNode
+  }
+
+  override def toString(): String = {
+    var toReturn: String = "\tJobTaskGraph " + jobId + "\n"
+      for (node <- nodes) {
+        toReturn += node.toString() + "\n"
+      }
+    toReturn
+  }
+}
+
+class JobsGraph(){
+  
+  val jobTaskGraphs: ListBuffer[JobTaskGraph] = ListBuffer[JobTaskGraph]()
+  
+  def addJobTaskGraph(jobTaskGraph: JobTaskGraph){
+    jobTaskGraphs += jobTaskGraph
+  }
+
+  def addTask(jobId: Int, taskNode: TaskNode) {
+    jobTaskGraphs.find(jobTaskGraph => jobTaskGraph.jobId == jobId).get.addTask(taskNode)
+  }
+
+  override def toString(): String = {
+    var toReturn: String = "JobsGraph\n"
+      for (jobTaskGraph <- jobTaskGraphs) {
+        toReturn += jobTaskGraph.toString() + "\n"
+      }
+    toReturn
+  }
+
+}
+
+
+

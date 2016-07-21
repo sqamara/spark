@@ -52,13 +52,6 @@ object DevelopDAG {
 		}
 	}
 	class Node(val nodeID: Int, val parents: List[Int]) {
-		// val stageId: Int
-		// val attemptId: Int
-		// val taskType: String
-		// //event.taskInfo ?
-		// val taskMetrics: TaskMetrics
-		// val parents: List[Node]
-		// val children: List[Node] 
 		var children: List[Int] = List[Int]()
 		def addChild(child: Int) {
 			children = child :: children 
