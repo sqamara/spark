@@ -1,1 +1,2 @@
-sc.textFile("/Users/sebastian/Projects/spark-1.6.2/README.MD", 5).flatMap(line => line.split(" ")).map(word => (word, 1)).reduceByKey(_+_).collect()
+val rdd_1 = sc.textFile("/Users/sebastian/Projects/spark-1.6.2/README.MD", 5).flatMap(line => line.split(" ")).map(word => (word, 1)).reduceByKey(_+_)
+rdd_1.collect()

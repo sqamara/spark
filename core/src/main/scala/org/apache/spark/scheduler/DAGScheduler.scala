@@ -130,7 +130,7 @@ class DAGScheduler(
 
   def this(sc: SparkContext) = this(sc, sc.taskScheduler)
 
-  val jobsGraph: JobsGraph = new JobsGraph()
+  val taskGraph: TaskGraph = new TaskGraph()
 
   private[spark] val metricsSource: DAGSchedulerSource = new DAGSchedulerSource(this)
 
@@ -572,11 +572,7 @@ class DAGScheduler(
         "Attempting to access a non-existent partition: " + p + ". " +
           "Total number of partitions: " + maxPartitions)
     }
-
     val jobId = nextJobId.getAndIncrement()
-
-    jobsGraph.addJobTaskGraph(new JobTaskGraph(jobId))
-
     if (partitions.size == 0) {
       // Return immediately if the job is running 0 tasks
       return new JobWaiter[U](this, jobId, 0, resultHandler)
@@ -617,6 +613,10 @@ class DAGScheduler(
       case JobSucceeded =>
         logInfo("Job %d finished: %s, took %f s".format
           (waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
+
+        logError(taskGraph.toString())
+        logError(rdd.toDebugString)
+
       case JobFailed(exception: Exception) =>
         logInfo("Job %d failed: %s, took %f s".format
           (waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
@@ -1137,19 +1137,34 @@ class DAGScheduler(
       // Skip all the actions if the stage has been cancelled.
       return
     }
+    val stage = stageIdToStage(task.stageId)
 
     logError("TASK PASSED")
-    logError("stageID:" + stageId)
-    logError("taskType:" + taskType)
-    logError("event.reason:" + event.reason)
-    logError("event.taskInfo:" + event.taskInfo)
-    logError("event.taskMetrics:" + event.taskMetrics)
-
-    val stage = stageIdToStage(task.stageId)
+    logError("stageID: " + stageId)
+    logError("taskType: " + taskType)
+    logError("event.reason: " + event.reason)
+    logError("task.partitionId " + task.partitionId)
+    logError("event.taskInfo: " + event.taskInfo)
+    logError("event.taskMetrics: " + event.taskMetrics)
     // TODO: a stage contains a hashset of multiple jobs that depend on it, so multiple nodes should be created
-    jobsGraph.addTask(stage.firstJobId, new TaskNode(stage.rdd.id, event.taskInfo.taskId.toInt, stageId, event.taskInfo.index, event.taskMetrics))
-    logError("stage.firstJobId:" + stage.firstJobId)
+    /* class TaskNode(   
+      val taskId: Int, 
+      val stageId: Int, 
+      val partitionIndex: Int, 
+      val JobIds: HashSet[Int], 
+      val rddId: Int, 
+      val metrics: TaskMetrics) {*/
+    taskGraph.addTask(new TaskNode(
+      event.taskInfo.taskId.toInt, 
+      stageId, 
+      event.taskInfo.index,
+      task.partitionId, 
+      stage.firstJobId,
+      // stage.jobIds,
+      stage.rdd.id, 
+      event.taskMetrics))
 
+    // logError("stage.firstJobId:" + stage.firstJobId)
 
     event.reason match {
       case Success =>
@@ -1237,6 +1252,8 @@ class DAGScheduler(
                   }
                 }
               }
+
+              logError("MapOutputStatistics " + mapOutputTracker.getStatistics(shuffleStage.shuffleDep).bytesByPartitionId.mkString(" "))
 
               // Note: newly runnable stages will be submitted below when we submit waiting stages
             }
@@ -1687,52 +1704,51 @@ private[spark] object DAGScheduler {
 
 /* building a dag of tasks */
 import scala.collection.mutable.ListBuffer
+// taskId
+// stageId
+// partitionIndex
+// jobId's
+// rddId
+// taskMetrics
+class TaskNode(
+    val taskId: Int, 
+    val stageId: Int,
+    val index: Int,
+    val partitionId: Int, 
+    val jobIds: Int, // first job that ran it
+    //val jobIds: HashSet[Int], 
+    val rddId: Int, 
+    val metrics: TaskMetrics) {
 
-class TaskNode(val rddId: Int, val taskId: Int, val stageId: Int, val partitionIndex: Int, val metrics: TaskMetrics) {
+  /* dependencies can beformed from the rdd getDependencies 
+     the output size of a task is within its TaskMetrics
+     */
+
   override def toString(): String = {
-    "\t\tTaskNode: " + "taskId " + taskId + ", stageId " + stageId + ", partitionIndex " + partitionIndex
+    var toReturn = "taskId: " + taskId + ", stageId: " + stageId + 
+    ", index: " + index + ", partitionId: " + partitionId + ", jobIds: " + 
+    jobIds + ", rddId: " + rddId
+    toReturn
   }
 }
 
 // TODO: replace this ListBuffer with a set because if 2 or more jobs are dependent on a task
 // it will be added multiple times to this JobTask because of @1148
-class JobTaskGraph(val jobId: Int) {
+class TaskGraph() {
   
-  var nodes: ListBuffer[TaskNode] = ListBuffer[TaskNode]()
+  var nodes: HashSet[TaskNode] = HashSet[TaskNode]()
   
   def addTask(taskNode: TaskNode) {
     nodes += taskNode
   }
 
   override def toString(): String = {
-    var toReturn: String = "\tJobTaskGraph " + jobId + "\n"
+    var toReturn: String = "TaskGraph\n"
       for (node <- nodes) {
-        toReturn += node.toString() + "\n"
+        toReturn += "\t" + node.toString() + "\n"
       }
     toReturn
   }
-}
-
-class JobsGraph(){
-  
-  val jobTaskGraphs: ListBuffer[JobTaskGraph] = ListBuffer[JobTaskGraph]()
-  
-  def addJobTaskGraph(jobTaskGraph: JobTaskGraph){
-    jobTaskGraphs += jobTaskGraph
-  }
-
-  def addTask(jobId: Int, taskNode: TaskNode) {
-    jobTaskGraphs.find(jobTaskGraph => jobTaskGraph.jobId == jobId).get.addTask(taskNode)
-  }
-
-  override def toString(): String = {
-    var toReturn: String = "JobsGraph\n"
-      for (jobTaskGraph <- jobTaskGraphs) {
-        toReturn += jobTaskGraph.toString() + "\n"
-      }
-    toReturn
-  }
-
 }
 
 

@@ -58,6 +58,7 @@ object DevelopDAG {
 		}
 		override def toString(): String = nodeID + " Parent" + parents + " Child" + children;
 	}
+
 	// class Edge() {
 	// }
 }
