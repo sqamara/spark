@@ -29,6 +29,7 @@ import org.apache.spark.deploy.worker.WorkerWatcher
 import org.apache.spark.scheduler.cluster.CoarseGrainedClusterMessages._
 import org.apache.spark.util.{AkkaUtils, Utils}
 
+
 private[spark] class CoarseGrainedExecutorBackend(
     driverUrl: String,
     executorId: String,
@@ -43,10 +44,14 @@ private[spark] class CoarseGrainedExecutorBackend(
   var executor: Executor = null
   var driver: ActorSelection = null
 
+  def readBWFromFile(filename: String): Double = {
+    scala.io.Source.fromFile(filename).mkString.toDouble
+  }
+
   override def preStart() {
     logInfo("Connecting to driver: " + driverUrl)
     driver = context.actorSelection(driverUrl)
-    driver ! RegisterExecutor(executorId, hostPort, cores)
+    driver ! RegisterExecutor(executorId, hostPort, cores, readBWFromFile("/root/bw.txt"))
     context.system.eventStream.subscribe(self, classOf[RemotingLifecycleEvent])
   }
 
@@ -62,13 +67,22 @@ private[spark] class CoarseGrainedExecutorBackend(
       System.exit(1)
 
     case LaunchTask(taskDesc) =>
+      logInfo(" name " + taskDesc.name + " additioanl: " + taskDesc.additional)
+      //+ taskDesc.name + " id" + taskDesc.additional)
       logInfo("Got assigned task " + taskDesc.taskId)
+
+      //executor.updateMOLFromTaskDesc(taskDesc.mapStatus, taskDesc.additional)
+
+      //logInfo("additional bit" + taskDesc.additional)
       if (executor == null) {
         logError("Received LaunchTask command but executor was null")
         System.exit(1)
       } else {
         executor.launchTask(this, taskDesc.taskId, taskDesc.serializedTask)
       }
+
+    case UpdateMapOutputExecutor(serializedStatus: Array[Byte], shuffleId: Int, reduceId: Int) =>
+      executor.updateMapOutput(serializedStatus, shuffleId, reduceId)
 
     case KillTask(taskId, _, interruptThread) =>
       if (executor == null) {

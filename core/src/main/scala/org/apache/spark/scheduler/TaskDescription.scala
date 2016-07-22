@@ -26,7 +26,10 @@ private[spark] class TaskDescription(
     val executorId: String,
     val name: String,
     val index: Int,    // Index within this task's TaskSet
-    _serializedTask: ByteBuffer)
+    val additional: Int,
+    val mapStatus: Array[Byte],
+    _serializedTask: ByteBuffer,
+    val bw: Double = 0)
   extends Serializable {
 
   // Because ByteBuffers are not serializable, wrap the task in a SerializableBuffer

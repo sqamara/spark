@@ -202,6 +202,11 @@ class BlockManagerMaster(var driverActor: ActorRef, conf: SparkConf) extends Log
     Await.result(future, timeout)
   }
 
+  def getBlockManagerIdByExecId(
+      execId: String): BlockManagerId = {
+    askDriverWithReply[BlockManagerId](GetBlockManagerIdByExecId(execId))
+  }
+
   /** Stop the driver actor, called only on the Spark driver node */
   def stop() {
     if (driverActor != null) {

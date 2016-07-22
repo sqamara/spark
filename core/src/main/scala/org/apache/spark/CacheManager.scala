@@ -35,6 +35,7 @@ private[spark] class CacheManager(blockManager: BlockManager) extends Logging {
   def getOrCompute[T](rdd: RDD[T], split: Partition, context: TaskContext,
       storageLevel: StorageLevel): Iterator[T] = {
     val key = RDDBlockId(rdd.id, split.index)
+    logInfo("GetOrCompute RDD " + rdd.id + " split " + split.index + " type " + rdd.getClass)
     logDebug("Looking for partition " + key)
     blockManager.get(key) match {
       case Some(values) =>

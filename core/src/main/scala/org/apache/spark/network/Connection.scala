@@ -26,7 +26,7 @@ import java.net._
 import java.nio._
 import java.nio.channels._
 
-import scala.collection.mutable.{ArrayBuffer, HashMap, Queue}
+import scala.collection.mutable.{ArrayBuffer, HashMap, Queue, HashSet}
 
 import org.apache.spark._
 
@@ -434,20 +434,21 @@ private[spark] class ReceivingConnection(
 
     def getChunk(header: MessageChunkHeader): Option[MessageChunk] = {
 
+
       def createNewMessage: BufferMessage = {
         val newMessage = Message.create(header).asInstanceOf[BufferMessage]
         newMessage.started = true
         newMessage.startTime = System.currentTimeMillis
         newMessage.isSecurityNeg = header.securityNeg == 1
-        logDebug(
+        logInfo(
           "Starting to receive [" + newMessage + "] from [" + getRemoteConnectionManagerId() + "]")
         messages += ((newMessage.id, newMessage))
         newMessage
       }
 
       val message = messages.getOrElseUpdate(header.id, createNewMessage)
-      logTrace(
-        "Receiving chunk of [" + message + "] from [" + getRemoteConnectionManagerId() + "]")
+      //logInfo(
+      //  "Receiving chunk of [" + message + "] from [" + getRemoteConnectionManagerId() + "]")
       message.getChunkForReceiving(header.chunkSize)
     }
 
@@ -485,9 +486,12 @@ private[spark] class ReceivingConnection(
   val inbox = new Inbox()
   val headerBuffer: ByteBuffer = ByteBuffer.allocate(MessageChunkHeader.HEADER_SIZE)
   var onReceiveCallback: (Connection, Message) => Unit = null
+  var onHeaderReceiveCallback: (Connection, String) => Boolean = null
   var currentChunk: MessageChunk = null
 
   channel.register(selector, SelectionKey.OP_READ)
+
+  val blocksInThisConnection = new HashSet[String]
 
   override def read(): Boolean = {
     try {
@@ -509,6 +513,24 @@ private[spark] class ReceivingConnection(
           }
           val header = MessageChunkHeader.create(headerBuffer)
           headerBuffer.clear()
+
+          // here we get the header
+          //logInfo(connectionId + " Got header for message " + header)
+
+          if (onHeaderReceiveCallback != null
+            && header.blockName.size > 0
+            && !blocksInThisConnection.contains(header.blockName) )
+          {
+            val continue = onHeaderReceiveCallback(this, header.blockName)
+            // cancel
+            if (continue) {
+              blocksInThisConnection += header.blockName
+            } else {
+                currentChunk = null
+                // re-register for read event ...
+                return true
+            }
+          }
 
           processConnectionManagerId(header)
 
@@ -548,7 +570,7 @@ private[spark] class ReceivingConnection(
           if (bufferMessage.isCompletelyReceived) {
             bufferMessage.flip
             bufferMessage.finishTime = System.currentTimeMillis
-            logDebug("Finished receiving [" + bufferMessage + "] from " +
+            logInfo("Finished receiving [" + bufferMessage + "] from " +
               "[" + getRemoteConnectionManagerId() + "] in " + bufferMessage.timeTaken)
             if (onReceiveCallback != null) {
               onReceiveCallback(this, bufferMessage)
@@ -571,6 +593,8 @@ private[spark] class ReceivingConnection(
   }
 
   def onReceive(callback: (Connection, Message) => Unit) {onReceiveCallback = callback}
+
+  def onHeaderReceive(callback: (Connection, String) => Boolean) {onHeaderReceiveCallback = callback}
 
   // override def changeInterestForRead(): Boolean = ! isClosed
   override def changeInterestForRead(): Boolean = true

@@ -26,6 +26,8 @@ import org.apache.spark.TaskContext
 import org.apache.spark.executor.TaskMetrics
 import org.apache.spark.serializer.SerializerInstance
 import org.apache.spark.util.ByteBufferInputStream
+import org.apache.spark.storage.{BlockId, BlockManagerId}
+
 
 /**
  * A unit of execution. We have two kinds of Task's in Spark:
@@ -60,6 +62,10 @@ private[spark] abstract class Task[T](val stageId: Int, var partitionId: Int) ex
 
   var metrics: Option[TaskMetrics] = None
 
+  var shuffleId: Int = -1
+  var serializedMapStatuses: Array[Byte] = null
+  var blockId: BlockId = null
+  var blockManagerId: Seq[BlockManagerId] = null
   // Task context, to be initialized in run().
   @transient protected var context: TaskContext = _
 

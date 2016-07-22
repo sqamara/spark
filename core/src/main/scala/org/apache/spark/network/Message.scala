@@ -20,9 +20,11 @@ package org.apache.spark.network
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 
+import org.apache.spark.Logging
+
 import scala.collection.mutable.ArrayBuffer
 
-private[spark] abstract class Message(val typ: Long, val id: Int) {
+private[spark] abstract class Message(val typ: Long, val id: Int) extends Logging{
   var senderAddress: InetSocketAddress = null
   var started = false
   var startTime = -1L

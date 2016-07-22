@@ -82,6 +82,8 @@ private[spark] class DiskBlockObjectWriter(
   extends BlockObjectWriter(blockId)
   with Logging
 {
+  def getFile = file
+  def getBlockId = blockId
 
   /** Intercepts write calls and tracks total time spent writing. Not thread safe. */
   private class TimeTrackingOutputStream(out: OutputStream) extends OutputStream {
@@ -114,6 +116,7 @@ private[spark] class DiskBlockObjectWriter(
 
   override def open(): BlockObjectWriter = {
     fos = new FileOutputStream(file, true)
+    logInfo("Open " + file)
     ts = new TimeTrackingOutputStream(fos)
     channel = fos.getChannel()
     lastValidPosition = initialPosition

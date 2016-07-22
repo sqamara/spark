@@ -97,6 +97,8 @@ private[spark] class ConnectionManager(port: Int, conf: SparkConf,
 
   private val authEnabled = securityManager.isAuthenticationEnabled()
 
+  private val inTransitOrFinishedBlocks = new HashSet[String]
+
   serverChannel.configureBlocking(false)
   serverChannel.socket.setReuseAddress(true)
   serverChannel.socket.setReceiveBufferSize(256 * 1024)
@@ -392,6 +394,7 @@ private[spark] class ConnectionManager(port: Int, conf: SparkConf,
         val newConnectionId = new ConnectionId(id, idCount.getAndIncrement.intValue)
         val newConnection = new ReceivingConnection(newChannel, selector, newConnectionId)
         newConnection.onReceive(receiveMessage)
+        newConnection.onHeaderReceive(receiveHeader)
         addListeners(newConnection)
         addConnection(newConnection)
         logInfo("Accepted connection from [" + newConnection.remoteAddress.getAddress + "]")
@@ -506,6 +509,21 @@ private[spark] class ConnectionManager(port: Int, conf: SparkConf,
     }
     handleMessageExecutor.execute(runnable)
     /* handleMessage(connection, message) */
+  }
+
+
+  def receiveHeader(connection: Connection, blockName: String): Boolean = {
+    // register into inTransitOrFinishedBlocks
+    // 1, stop connections if block already exists(?)
+    // 3, clear cache periodiaclly so the hashset doesn't grow infinitely
+    // if transit fails, delete
+    val continue = !inTransitOrFinishedBlocks.contains(blockName)
+    inTransitOrFinishedBlocks += blockName
+    continue
+  }
+
+  def checkFetchNeededByBlockName(blockName: String): Boolean = {
+    return(!inTransitOrFinishedBlocks.contains(blockName))
   }
 
   private def handleClientAuthentication(
@@ -674,12 +692,35 @@ private[spark] class ConnectionManager(port: Int, conf: SparkConf,
             }
           }
 
-          sendMessage(connectionManagerId, ackMessage.getOrElse {
-            Message.createBufferMessage(bufferMessage.id)
-          })
+          //if (ackMessage.isDefined) {
+            sendMessage(connectionManagerId, ackMessage.getOrElse {
+              Message.createBufferMessage(bufferMessage.id)
+            })
+          //}
         }
       }
       case _ => throw new Exception("Unknown type message received")
+    }
+  }
+
+  def sendResponseMessage(
+        connectionManagerId: ConnectionManagerId,
+        bufferMessage: Message,
+        ackMessage: Option[Message]) {
+    if (ackMessage.isDefined) {
+      if (!ackMessage.get.isInstanceOf[BufferMessage]) {
+        logDebug("Response to " + bufferMessage + " is not a buffer message, it is of type "
+          + ackMessage.get.getClass())
+      } else if (!ackMessage.get.asInstanceOf[BufferMessage].hasAckId) {
+        logDebug("Response to " + bufferMessage + " does not have ack id set")
+        ackMessage.get.asInstanceOf[BufferMessage].ackId = bufferMessage.id
+      }
+    }
+
+    if (ackMessage.isDefined) {
+      sendMessage(connectionManagerId, ackMessage.getOrElse {
+        Message.createBufferMessage(bufferMessage.id)
+      })
     }
   }
 

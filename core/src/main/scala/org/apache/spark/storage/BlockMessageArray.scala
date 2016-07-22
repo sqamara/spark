@@ -74,9 +74,11 @@ class BlockMessageArray(var blockMessages: Seq[BlockMessage])
   def toBufferMessage: BufferMessage = {
     val buffers = new ArrayBuffer[ByteBuffer]()
 
+    var blockName: String = ""
     blockMessages.foreach(blockMessage => {
       val bufferMessage = blockMessage.toBufferMessage
       logDebug("Adding " + blockMessage)
+      if (blockName == "") blockName = bufferMessage.getBlockName()
       val sizeBuffer = ByteBuffer.allocate(4).putInt(bufferMessage.size)
       sizeBuffer.flip
       buffers += sizeBuffer
@@ -98,7 +100,11 @@ class BlockMessageArray(var blockMessages: Seq[BlockMessage])
     println()
     println()
     */
-    Message.createBufferMessage(buffers)
+    //TODO
+    logInfo("TODO: might fetch multiple blocks, current only id: " + blockName)
+    val message = Message.createBufferMessage(buffers)
+    message.setBlockName(blockName)
+    message
   }
 }
 

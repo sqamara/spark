@@ -112,10 +112,12 @@ class ShuffleBlockManager(blockManager: BlockManager) extends Logging {
           if (blockFile.exists) {
             if (blockFile.delete()) {
               logInfo(s"Removed existing shuffle file $blockFile")
+              blockManager.notifyOnDeletedBlock(blockId)
             } else {
               logWarning(s"Failed to remove existing shuffle file $blockFile")
             }
           }
+          //logInfo("get writer for block " + blockId + " file: " + blockFile)
           blockManager.getDiskWriter(blockId, blockFile, serializer, bufferSize)
         }
       }
@@ -190,6 +192,7 @@ class ShuffleBlockManager(blockManager: BlockManager) extends Logging {
           for (mapId <- state.completedMapTasks; reduceId <- 0 until state.numBuckets) {
             val blockId = new ShuffleBlockId(shuffleId, mapId, reduceId)
             blockManager.diskBlockManager.getFile(blockId).delete()
+            blockManager.notifyOnDeletedBlock(blockId)
           }
         }
         logInfo("Deleted all files for shuffle " + shuffleId)

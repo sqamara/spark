@@ -40,7 +40,7 @@ import org.apache.spark.partial.BoundedDouble
 import org.apache.spark.partial.CountEvaluator
 import org.apache.spark.partial.GroupedCountEvaluator
 import org.apache.spark.partial.PartialResult
-import org.apache.spark.storage.StorageLevel
+import org.apache.spark.storage.{StorageLevel,BlockId}
 import org.apache.spark.util.{BoundedPriorityQueue, SerializableHyperLogLog, Utils}
 import org.apache.spark.util.collection.OpenHashMap
 import org.apache.spark.util.random.{BernoulliSampler, PoissonSampler}
@@ -99,6 +99,12 @@ abstract class RDD[T: ClassTag](
    * be called once, so it is safe to implement a time-consuming computation in it.
    */
   protected def getPartitions: Array[Partition]
+
+  /**
+   * Get block ID
+   *
+   */
+  def getBlockId(split: Partition): BlockId = null
 
   /**
    * Implemented by subclasses to return how this RDD depends on parent RDDs. This method will only
@@ -207,6 +213,16 @@ abstract class RDD[T: ClassTag](
     }
   }
 
+
+  /**
+   * Return a copy of the RDD partitioned using the specified partitioner.
+   */
+  /*
+  def setPartitioner(partitioner: Partitioner) {
+    self.partitioner = partitioner
+  }
+  */
+
   /**
    * Get the preferred locations of a partition (as hostnames), taking into account whether the
    * RDD is checkpointed.
@@ -224,8 +240,10 @@ abstract class RDD[T: ClassTag](
    */
   final def iterator(split: Partition, context: TaskContext): Iterator[T] = {
     if (storageLevel != StorageLevel.NONE) {
+      //logInfo("Iterator: " + "StorageLevel.exist" + " RDDID " + this.id)
       SparkEnv.get.cacheManager.getOrCompute(this, split, context, storageLevel)
     } else {
+      //logInfo("Iterator: " + "StorageLevel.NONE" + " RDDID " + this.id)
       computeOrReadCheckpoint(split, context)
     }
   }

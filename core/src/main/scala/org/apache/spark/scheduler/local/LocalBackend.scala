@@ -106,4 +106,12 @@ private[spark] class LocalBackend(scheduler: TaskSchedulerImpl, val totalCores: 
   override def statusUpdate(taskId: Long, state: TaskState, serializedData: ByteBuffer) {
     localActor ! StatusUpdate(taskId, state, serializedData)
   }
+
+  override def updateMapOutput(eId: String,
+                               shuffleId: Int,
+                               statuses: Array[Byte],
+                               index: Int) {
+    // doing nothing
+    // TODO: implement
+  }
 }

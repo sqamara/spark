@@ -31,6 +31,9 @@ private[spark] abstract class ShuffleFetcher {
       context: TaskContext,
       serializer: Serializer = SparkEnv.get.serializer): Iterator[T]
 
+  def updateFetch(
+                   shuffleId: Int,
+                   reduceId: Int)
   /** Stop the fetcher */
   def stop() {}
 }

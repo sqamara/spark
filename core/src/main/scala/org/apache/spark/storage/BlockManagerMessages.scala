@@ -124,5 +124,8 @@ private[storage] object BlockManagerMessages {
   case class GetMatchingBlockIds(filter: BlockId => Boolean, askSlaves: Boolean = true)
     extends ToBlockManagerMaster
 
+  case class GetBlockManagerIdByExecId(execId: String)
+    extends ToBlockManagerMaster
+
   case object ExpireDeadHosts extends ToBlockManagerMaster
 }

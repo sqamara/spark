@@ -41,10 +41,15 @@ class BlockRDD[T: ClassTag](@transient sc: SparkContext, @transient val blockIds
     }).toArray
   }
 
+  override def getBlockId(split: Partition) : BlockId = {
+    return split.asInstanceOf[BlockRDDPartition].blockId
+  }
+
   override def compute(split: Partition, context: TaskContext): Iterator[T] = {
     assertValid()
     val blockManager = SparkEnv.get.blockManager
     val blockId = split.asInstanceOf[BlockRDDPartition].blockId
+    logInfo("blockRDD compute " + blockId)
     blockManager.get(blockId) match {
       case Some(block) => block.asInstanceOf[Iterator[T]]
       case None =>

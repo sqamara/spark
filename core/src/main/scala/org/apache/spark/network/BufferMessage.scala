@@ -22,13 +22,15 @@ import java.nio.ByteBuffer
 import scala.collection.mutable.ArrayBuffer
 
 import org.apache.spark.storage.BlockManager
+import org.apache.spark.Logging
 
 private[spark]
 class BufferMessage(id_ : Int, val buffers: ArrayBuffer[ByteBuffer], var ackId: Int)
-  extends Message(Message.BUFFER_MESSAGE, id_) {
+  extends Message(Message.BUFFER_MESSAGE, id_){
 
   val initialSize = currentSize()
   var gotChunkForSendingOnce = false
+  var blockName: String = ""
 
   def size = initialSize
 
@@ -40,6 +42,14 @@ class BufferMessage(id_ : Int, val buffers: ArrayBuffer[ByteBuffer], var ackId: 
     }
   }
 
+  def setBlockName(name: String) {
+    blockName = name
+  }
+
+  def getBlockName(): String = {
+    blockName
+  }
+
   def getChunkForSending(maxChunkSize: Int): Option[MessageChunk] = {
     if (maxChunkSize <= 0) {
       throw new Exception("Max chunk size is " + maxChunkSize)
@@ -48,7 +58,7 @@ class BufferMessage(id_ : Int, val buffers: ArrayBuffer[ByteBuffer], var ackId: 
     val security = if (isSecurityNeg) 1 else 0
     if (size == 0 && !gotChunkForSendingOnce) {
       val newChunk = new MessageChunk(
-        new MessageChunkHeader(typ, id, 0, 0, ackId, security, senderAddress), null)
+        new MessageChunkHeader(typ, id, 0, 0, ackId, security, senderAddress, ""), null)
       gotChunkForSendingOnce = true
       return Some(newChunk)
     }
@@ -66,7 +76,8 @@ class BufferMessage(id_ : Int, val buffers: ArrayBuffer[ByteBuffer], var ackId: 
         }
         buffer.position(buffer.position + newBuffer.remaining)
         val newChunk = new MessageChunk(new MessageChunkHeader(
-            typ, id, size, newBuffer.remaining, ackId, security, senderAddress), newBuffer)
+            typ, id, size, newBuffer.remaining, ackId, security, senderAddress, blockName), newBuffer)
+        logDebug("Create MessageChunkHeader with blockid " + blockName)
         gotChunkForSendingOnce = true
         return Some(newChunk)
       }
@@ -88,7 +99,7 @@ class BufferMessage(id_ : Int, val buffers: ArrayBuffer[ByteBuffer], var ackId: 
       val newBuffer = buffer.slice().limit(chunkSize).asInstanceOf[ByteBuffer]
       buffer.position(buffer.position + newBuffer.remaining)
       val newChunk = new MessageChunk(new MessageChunkHeader(
-          typ, id, size, newBuffer.remaining, ackId, security, senderAddress), newBuffer)
+          typ, id, size, newBuffer.remaining, ackId, security, senderAddress, ""), newBuffer)
       return Some(newChunk)
     }
     None

@@ -36,4 +36,19 @@ private[spark] class TaskSet(
   }
 
   override def toString: String = "TaskSet " + id
+
+  var isShuffleDependent: Boolean = false
+  var mapTaskInfo: Array[MapStatus] = null
+  def setShuffleDependent(flag: Boolean = true) {
+    isShuffleDependent = flag
+  }
+  def checkShuffleDependent(): Boolean = {
+    return isShuffleDependent
+  }
+  def setMapTaskInfo(info: Array[MapStatus]) {
+    mapTaskInfo = info
+  }
+  def getMapTaskInfo(): Array[MapStatus] = {
+    return mapTaskInfo
+  }
 }

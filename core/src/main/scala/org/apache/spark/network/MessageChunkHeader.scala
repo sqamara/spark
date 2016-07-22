@@ -20,6 +20,7 @@ package org.apache.spark.network
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
+import org.apache.spark.Logging
 
 private[spark] class MessageChunkHeader(
     val typ: Long,
@@ -28,12 +29,18 @@ private[spark] class MessageChunkHeader(
     val chunkSize: Int,
     val other: Int,
     val securityNeg: Int,
-    val address: InetSocketAddress) {
+    val address: InetSocketAddress,
+    val blockName: String)  extends Logging {
+
   lazy val buffer = {
     // No need to change this, at 'use' time, we do a reverse lookup of the hostname.
     // Refer to network.Connection
     val ip = address.getAddress.getAddress()
     val port = address.getPort()
+    if (blockName.size > 20) {
+      throw new Exception("block name size too big")
+    }
+    //logInfo("Create message chunk header , ipsize " + ip.size)
     ByteBuffer.
       allocate(MessageChunkHeader.HEADER_SIZE).
       putLong(typ).
@@ -45,18 +52,21 @@ private[spark] class MessageChunkHeader(
       putInt(ip.size).
       put(ip).
       putInt(port).
+      putInt(blockName.size).
+      put(blockName.toCharArray.map(_.toByte)).
       position(MessageChunkHeader.HEADER_SIZE).
       flip.asInstanceOf[ByteBuffer]
   }
 
   override def toString = "" + this.getClass.getSimpleName + ":" + id + " of type " + typ +
-      " and sizes " + totalSize + " / " + chunkSize + " bytes, securityNeg: " + securityNeg
-
+      " and sizes " + totalSize + " / " + chunkSize + " bytes, securityNeg: " + securityNeg +
+      " blockName " + blockName
 }
 
 
-private[spark] object MessageChunkHeader {
-  val HEADER_SIZE = 44
+private[spark] object MessageChunkHeader extends Logging {
+  //val HEADER_SIZE = 44
+  val HEADER_SIZE = 68
 
   def create(buffer: ByteBuffer): MessageChunkHeader = {
     if (buffer.remaining != HEADER_SIZE) {
@@ -73,7 +83,14 @@ private[spark] object MessageChunkHeader {
     buffer.get(ipBytes)
     val ip = InetAddress.getByAddress(ipBytes)
     val port = buffer.getInt()
+    val blockNameSize = buffer.getInt()
+    val blockNameArray = new Array[Byte](blockNameSize)
+    if (blockNameSize > 20) {
+      throw new Exception("block name size too big")
+    }
+    buffer.get(blockNameArray)
+    val blockName = new String(blockNameArray.map(_.toChar))
     new MessageChunkHeader(typ, id, totalSize, chunkSize, other, securityNeg,
-      new InetSocketAddress(ip, port))
+      new InetSocketAddress(ip, port), blockName)
   }
 }

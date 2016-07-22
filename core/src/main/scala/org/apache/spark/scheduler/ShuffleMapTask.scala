@@ -22,7 +22,7 @@ import scala.language.existentials
 import java.io._
 import java.util.zip.{GZIPInputStream, GZIPOutputStream}
 
-import scala.collection.mutable.HashMap
+import scala.collection.mutable.{HashSet, HashMap}
 
 import org.apache.spark._
 import org.apache.spark.executor.ShuffleWriteMetrics
@@ -124,6 +124,10 @@ private[spark] class ShuffleMapTask(
       out.writeInt(partitionId)
       out.writeLong(epoch)
       out.writeObject(split)
+      out.writeInt(shuffleId)
+      out.writeObject(serializedMapStatuses)
+      out.writeObject(blockId)
+      out.writeObject(blockManagerId)
     }
   }
 
@@ -138,6 +142,10 @@ private[spark] class ShuffleMapTask(
     partitionId = in.readInt()
     epoch = in.readLong()
     split = in.readObject().asInstanceOf[Partition]
+    shuffleId = in.readInt()
+    serializedMapStatuses = in.readObject().asInstanceOf[Array[Byte]]
+    blockId = in.readObject().asInstanceOf[BlockId]
+    blockManagerId = in.readObject().asInstanceOf[Seq[BlockManagerId]]
   }
 
   override def runTask(context: TaskContext): MapStatus = {
@@ -149,29 +157,48 @@ private[spark] class ShuffleMapTask(
     var shuffle: ShuffleWriterGroup = null
     var success = false
 
+    val writtenBlocks = new HashSet[BlockId]()
+
     try {
       // Obtain all the block writers for shuffle blocks.
       val ser = Serializer.getSerializer(dep.serializer)
       shuffle = shuffleBlockManager.forMapTask(dep.shuffleId, partitionId, numOutputSplits, ser)
 
       // Write the map output to its associated buckets.
+      val timeStarted = System.currentTimeMillis()
       for (elem <- rdd.iterator(split, context)) {
         val pair = elem.asInstanceOf[Product2[Any, Any]]
         val bucketId = dep.partitioner.getPartition(pair._1)
+        // add written block into the list
+        writtenBlocks += shuffle.writers(bucketId).asInstanceOf[DiskBlockObjectWriter].getBlockId
         shuffle.writers(bucketId).write(pair)
+        /*
+        logInfo("writing map output to disk for "
+          + shuffle.writers(bucketId).asInstanceOf[DiskBlockObjectWriter].blockId
+          + " "
+          + shuffle.writers(bucketId).asInstanceOf[DiskBlockObjectWriter].getFile)
+          */
       }
+
+      val timeFirstStage = System.currentTimeMillis()
+
 
       // Commit the writes. Get the size of each bucket block (total block size).
       var totalBytes = 0L
       var totalTime = 0L
       val compressedSizes: Array[Byte] = shuffle.writers.map { writer: BlockObjectWriter =>
+        //logInfo("Writting block " + writer.asInstanceOf[DiskBlockObjectWriter].getBlockId + " into file")
         writer.commit()
         writer.close()
+        //logInfo("Success Writting block " + writer.asInstanceOf[DiskBlockObjectWriter].getBlockId + " into file")
         val size = writer.fileSegment().length
         totalBytes += size
         totalTime += writer.timeWriting()
         MapOutputTracker.compressSize(size)
       }
+
+      val timeSecondStage = System.currentTimeMillis()
+      logInfo("first stage: " + (timeFirstStage-timeStarted) +" second: " + (timeSecondStage-timeStarted))
 
       // Update shuffle metrics.
       val shuffleMetrics = new ShuffleWriteMetrics
@@ -182,6 +209,7 @@ private[spark] class ShuffleMapTask(
       success = true
       new MapStatus(blockManager.blockManagerId, compressedSizes)
     } catch { case e: Exception =>
+      logError("Running into exception from running the task")
       // If there is an exception from running the task, revert the partial writes
       // and throw the exception upstream to Spark.
       if (shuffle != null && shuffle.writers != null) {
@@ -194,6 +222,10 @@ private[spark] class ShuffleMapTask(
     } finally {
       // Release the writers back to the shuffle block manager.
       if (shuffle != null && shuffle.writers != null) {
+        logInfo("before release writers, callback on the blockmanager if a fetched block is available")
+        //val writtenBlocks = shuffle.writers.map(x => x.asInstanceOf[DiskBlockObjectWriter].getBlockId)
+        blockManager.notifyOnFinishedBlocks(writtenBlocks.toArray)
+
         try {
           shuffle.releaseWriters(success)
         } catch {
@@ -202,6 +234,10 @@ private[spark] class ShuffleMapTask(
       }
       // Execute the callbacks on task completion.
       context.executeOnCompleteCallbacks()
+
+      //
+      //logInfo("before going back to master, callback on the blockmanager if a waiting block is available")
+      //blockManager.getWorker.processAllPendingRequests()
     }
   }
 

@@ -27,6 +27,10 @@ private[spark] trait SchedulerBackend {
   def stop(): Unit
   def reviveOffers(): Unit
   def defaultParallelism(): Int
+  def updateMapOutput(eId: String,
+    shuffleId: Int,
+    statuses: Array[Byte],
+    index: Int)
 
   def killTask(taskId: Long, executorId: String, interruptThread: Boolean): Unit =
     throw new UnsupportedOperationException

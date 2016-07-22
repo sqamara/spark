@@ -83,6 +83,9 @@ class BlockManagerMasterActor(val isLocal: Boolean, conf: SparkConf, listenerBus
     case GetLocations(blockId) =>
       sender ! getLocations(blockId)
 
+    case GetBlockManagerIdByExecId(execId) =>
+      sender ! getBlockManagerIdByExecId(execId)
+
     case GetLocationsMultipleBlockIds(blockIds) =>
       sender ! getLocationsMultipleBlockIds(blockIds)
 
@@ -394,6 +397,11 @@ class BlockManagerMasterActor(val isLocal: Boolean, conf: SparkConf, listenerBus
   private def getLocations(blockId: BlockId): Seq[BlockManagerId] = {
     if (blockLocations.containsKey(blockId)) blockLocations.get(blockId).toSeq else Seq.empty
   }
+
+  private def getBlockManagerIdByExecId(execId: String): BlockManagerId = {
+    return blockManagerIdByExecutor.getOrElse(execId, null)
+  }
+
 
   private def getLocationsMultipleBlockIds(blockIds: Array[BlockId]): Seq[Seq[BlockManagerId]] = {
     blockIds.map(blockId => getLocations(blockId))

@@ -23,12 +23,14 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable.StringBuilder
 
 import org.apache.spark.network._
+import org.apache.spark.Logging
+
 
 private[spark] case class GetBlock(id: BlockId)
 private[spark] case class GotBlock(id: BlockId, data: ByteBuffer)
 private[spark] case class PutBlock(id: BlockId, data: ByteBuffer, level: StorageLevel)
 
-private[spark] class BlockMessage() {
+private[spark] class BlockMessage() extends Logging{
   // Un-initialized: typ = 0
   // GetBlock: typ = 1
   // GotBlock: typ = 2
@@ -150,7 +152,11 @@ private[spark] class BlockMessage() {
     println()
     println()
     */
-    Message.createBufferMessage(buffers)
+    val bufferMessage = Message.createBufferMessage(buffers)
+    // we need blockname here
+    logDebug("setBlockName for typ " + typ + " id: " + id)
+    if (id != null && typ == BlockMessage.TYPE_GOT_BLOCK) bufferMessage.setBlockName(id.name)
+    bufferMessage
   }
 
   override def toString: String = {

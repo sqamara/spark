@@ -32,7 +32,7 @@ import org.apache.spark._
 import org.apache.spark.TaskState.TaskState
 import org.apache.spark.scheduler.SchedulingMode.SchedulingMode
 import org.apache.spark.util.Utils
-
+import scala.util.control.Breaks._
 /**
  * Schedules tasks for multiple types of clusters by acting through a SchedulerBackend.
  * It can also work with a local setup by using a LocalBackend and setting isLocal to true.
@@ -57,6 +57,14 @@ private[spark] class TaskSchedulerImpl(
   def this(sc: SparkContext) = this(sc, sc.conf.getInt("spark.task.maxFailures", 4))
 
   val conf = sc.conf
+
+  val BANDWIDTH_SCHEDULING = conf.getBoolean("spark.dag.bandwidthScheduling", false)
+  val LP_BANDWIDTH_SCHEDULING = conf.getBoolean("spark.dag.lpBandwidthScheduling", false)
+
+  //val BANDWIDTH_FILE_NAME = conf.get("spark.dag.bandwidthFileName", "\\root\\bwconf.txt")
+  val SITE_INFO_FILE_NAME = conf.get("spark.dag.siteInfoFileName", "\\root\\site.txt")
+  val MAP_OUTPUT_INFO_FILE_NAME = conf.get("spark.dag.mapOutputInfoFileName", "\\root\\mapooutput.txt")
+  val PLACEMENT_FILE_NAME = conf.get("spark.dag.placementFileName", "\\root\\placement.txt")
 
   // How often to check for speculative tasks
   val SPECULATION_INTERVAL = conf.getLong("spark.speculation.interval", 100)
@@ -148,6 +156,10 @@ private[spark] class TaskSchedulerImpl(
   override def submitTasks(taskSet: TaskSet) {
     val tasks = taskSet.tasks
     logInfo("Adding task set " + taskSet.id + " with " + tasks.length + " tasks")
+    for (task <- tasks) {
+      logInfo("Adding task shuffle ID " + task.shuffleId)
+    }
+
     this.synchronized {
       val manager = new TaskSetManager(this, taskSet, maxTaskFailures)
       activeTaskSets(taskSet.id) = manager
@@ -249,6 +261,7 @@ private[spark] class TaskSchedulerImpl(
               availableCpus(i) -= CPUS_PER_TASK
               assert (availableCpus(i) >= 0)
               launchedTask = true
+              logInfo("Task " + task.taskId + " from stage " + taskSet.stageId + " goes to exec "  + execId)
             }
           }
         }
@@ -260,6 +273,258 @@ private[spark] class TaskSchedulerImpl(
     }
     return tasks
   }
+
+  /** code for bw-aware LP
+   *
+   */
+  def lpBWAware(shuffledOffers: Seq[WorkerOfferWithBW],
+                       tasks: Seq[ArrayBuffer[TaskDescription]],
+                       availableCpus: Array[Int],
+                       taskSet: TaskSetManager) {
+    // write map ouput info
+    val mapInfo: Array[MapStatus] = taskSet.taskSet.getMapTaskInfo()
+    var mapFile = new java.io.FileOutputStream(MAP_OUTPUT_INFO_FILE_NAME)
+    var mapStream = new java.io.PrintStream(mapFile)
+    var nReducer = 0
+    for (status <- mapInfo) {
+      val host = status.location.host
+      mapStream.print(host)
+      val sizeList = status.compressedSizes.map(MapOutputTracker.decompressSize)
+      nReducer = sizeList.size
+      for (size <- sizeList) {
+        mapStream.print(" " + size.toString())
+      }
+      mapStream.print("\n")
+    }
+    mapStream.close()
+    // write site info
+    var siteFile = new java.io.FileOutputStream(SITE_INFO_FILE_NAME)
+    var siteStream = new java.io.PrintStream(siteFile)
+    val hostExecMap = new HashMap[String, String]
+    val hostOfferMap = new HashMap[String, Int]
+    for (i <- 0 until shuffledOffers.size) {
+      val host = shuffledOffers(i).host
+      val execId = shuffledOffers(i).executorId
+      siteStream.print(host + " " +  shuffledOffers(i).bw + " " + shuffledOffers(i).bw + "\n")
+      hostExecMap.put(host, execId)
+      hostOfferMap.put(host, i)
+    }
+    siteStream.close()
+    siteFile.close()
+    // issue the command
+    import sys.process._
+    "Rscript /root/bw-aware.r" !
+    // read the output
+    val placeFile = new java.io.FileInputStream(PLACEMENT_FILE_NAME)
+    val placeReader = new java.io.BufferedReader(new java.io.InputStreamReader(placeFile))
+    val placement = new Array[String](nReducer)
+    for (i <- 0 to nReducer-1) {
+      placement(i) = placeReader.readLine()
+      logInfo("reducer " + i + " assigned to " + placement(i))
+    }
+    val time = placeReader.readLine()
+    logInfo("total time " + time)
+    logInfo("assuming CPU is not bottleneck now, TODO: add constraits into solver")
+    placeReader.close()
+    placeFile.close()
+
+    // do the actual scheduling now
+    var launchedTask = false
+    val maxLocality = TaskLocality.ANY
+    do {
+      launchedTask = false
+      for (taskIndex <- 0 to placement.size - 1) {
+        val host = placement(taskIndex)
+        val execId = hostExecMap.getOrElse(host, "0")
+        val i = hostOfferMap.getOrElse(host, 0)
+        if (availableCpus(i) >= CPUS_PER_TASK) {
+          val taskGenerated = taskSet.resourceOfferWithIndex(execId, host, taskIndex)
+
+          for (task <- taskGenerated) {
+            tasks(i) += task
+            val tid = task.taskId
+            taskIdToTaskSetId(tid) = taskSet.taskSet.id
+            taskIdToExecutorId(tid) = execId
+            activeExecutorIds += execId
+            executorsByHost(host) += execId
+            availableCpus(i) -= CPUS_PER_TASK
+            assert(availableCpus(i) >= 0)
+            launchedTask = true
+            logInfo("BW aware scheduling Task " + task.taskId + " from stage " + taskSet.stageId + " goes to exec " + execId)
+          }
+        }
+      }
+    } while (launchedTask)
+  }
+
+    /** code for performing bw-aware heuristic
+   *
+   */
+  def heuristicBWAware(shuffledOffers: Seq[WorkerOfferWithBW],
+                       tasks: Seq[ArrayBuffer[TaskDescription]],
+                       availableCpus: Array[Int],
+                       taskSet: TaskSetManager) {
+    var launchedTask = false
+    //reducer taskset
+    //1 get location of all map tasks (assume they generate same amount of data
+    val mapInfo: Array[MapStatus] = taskSet.taskSet.getMapTaskInfo()
+    logInfo("assuming totally uniform key distribution here, assuming one executor/host")
+    //2 get number of reducers
+    val numTasks = taskSet.numTasks
+    logInfo("number of tasks: " + numTasks)
+    //3 get bandwidth
+    val hostBWMap = new HashMap[String, Float]
+    val hostExecMap = new HashMap[String, String]
+    val hostOfferMap = new HashMap[String, Int]
+    for (i <- 0 until shuffledOffers.size) {
+      val execId = shuffledOffers(i).executorId
+      val host = shuffledOffers(i).host
+      logInfo("resources: e: " + execId + " h: " + host + " bw: " + shuffledOffers(i).bw)
+      hostBWMap.put(host, shuffledOffers(i).bw.toFloat)
+      hostExecMap.put(host, execId)
+      hostOfferMap.put(host, i)
+    }
+    val hostSizeMap = new HashMap[String, Long]
+    for (status <- mapInfo) {
+      val host = status.location.host
+      val totalSize = status.compressedSizes.map(MapOutputTracker.decompressSize).sum
+      logInfo("map location " + host
+        + " size: " + totalSize)
+      hostSizeMap.put(host, totalSize + hostSizeMap.getOrElse(host, 0L))
+      //host = status.location.host
+    }
+
+    var hostSubset = List[String]()
+    var candidateTime = List[Float]()
+    val totalDataSize = hostSizeMap.values.sum
+    for (pair <- hostBWMap.toSeq.sortBy(_._2).reverse) {
+      logInfo("trying different subse size....")
+      hostSubset :+= pair._1
+      var maxTime = 0.0f
+      for (host <- hostSizeMap.keys) {
+        if (hostSubset.contains(host)) {
+          val timeIn = 1.0f * (totalDataSize - hostSizeMap(host)) / hostSubset.size / hostBWMap(host)
+          val timeOut = 1.0f * hostSizeMap(host) / hostSubset.size * (hostSubset.size - 1) / hostBWMap(host)
+          maxTime = List(maxTime, timeIn, timeOut).max
+        } else {
+          val timeOut = 1.0f * hostSizeMap(host) / hostBWMap(host)
+          maxTime = List(maxTime, timeOut).max
+        }
+      }
+      candidateTime :+= maxTime
+    }
+    val nHosts = candidateTime.zipWithIndex.minBy(_._1)._2 + 1
+    val desiredHosts = hostBWMap.toSeq.sortBy(_._2).reverse.map(x => x._1).slice(0, nHosts).toList
+    logInfo("ideal list: " + desiredHosts)
+    // fake decision, half goes to B, half goes to C
+    var numAllocatedTasks = 0
+    // go to any directly
+    //for (maxLocality <- TaskLocality.ANY) {
+    val maxLocality = TaskLocality.ANY
+    do {
+      launchedTask = false
+      for (host <- desiredHosts) {
+        val execId = hostExecMap.getOrElse(host, "0")
+        val i = hostOfferMap.getOrElse(host, 0)
+        if (availableCpus(i) >= CPUS_PER_TASK) {
+          val taskGenerated = taskSet.resourceOffer(execId, host, maxLocality)
+          /*
+            logInfo("host " + host + " exec " + execId + " "
+              + numAllocatedTasks + "/" + numTasks
+              + " locality: " + maxLocality)
+            logInfo("taskgenerated " + taskGenerated.size)
+          */
+          for (task <- taskGenerated) {
+            tasks(i) += task
+            val tid = task.taskId
+            taskIdToTaskSetId(tid) = taskSet.taskSet.id
+            taskIdToExecutorId(tid) = execId
+            activeExecutorIds += execId
+            executorsByHost(host) += execId
+            availableCpus(i) -= CPUS_PER_TASK
+            assert(availableCpus(i) >= 0)
+            launchedTask = true
+            numAllocatedTasks += 1
+            logInfo("BW aware scheduling Task " + task.taskId + " from stage " + taskSet.stageId + " goes to exec " + execId)
+          }
+        }
+      }
+    } while (launchedTask)
+  }
+  /**
+   * functionally similar to resourceOffers, also takes bandwidth information
+   *
+   */
+  def resourceOffersWithBW(offers: Seq[WorkerOfferWithBW]): Seq[Seq[TaskDescription]] = synchronized {
+    SparkEnv.set(sc.env)
+
+    // Mark each slave as alive and remember its hostname
+    for (o <- offers) {
+      executorIdToHost(o.executorId) = o.host
+      if (!executorsByHost.contains(o.host)) {
+        executorsByHost(o.host) = new HashSet[String]()
+        executorAdded(o.executorId, o.host)
+      }
+    }
+
+    // Randomly shuffle offers to avoid always placing tasks on the same set of workers.
+    val shuffledOffers = Random.shuffle(offers)
+    // Build a list of tasks to assign to each worker.
+    val sortedTaskSets = rootPool.getSortedTaskSetQueue
+    for (taskSet <- sortedTaskSets) {
+      logDebug("in resourceOffersWithBW parentName: %s, name: %s, runningTasks: %s".format(
+        taskSet.parent.name, taskSet.name, taskSet.runningTasks))
+    }
+    val tasks = shuffledOffers.map(o => new ArrayBuffer[TaskDescription](o.cores))
+    val availableCpus = shuffledOffers.map(o => o.cores).toArray
+
+    // Take each TaskSet in our scheduling order, and then offer it each node in increasing order
+    // of locality levels so that it gets a chance to launch local tasks on all of them.
+    var launchedTask = false
+    for (taskSet <- sortedTaskSets) {
+      if (taskSet.taskSet.checkShuffleDependent() && (BANDWIDTH_SCHEDULING || LP_BANDWIDTH_SCHEDULING)) {
+        if (LP_BANDWIDTH_SCHEDULING) {
+          // lp logic starts here
+          lpBWAware(shuffledOffers, tasks, availableCpus, taskSet)
+          // lp logic ends
+        } else {
+          //heuristic logic starts here
+          heuristicBWAware(shuffledOffers, tasks, availableCpus, taskSet)
+          //heuristic logic ends
+        }
+      } else {
+        for (maxLocality <- TaskLocality.values) {
+          do {
+            launchedTask = false
+            for (i <- 0 until shuffledOffers.size) {
+              val execId = shuffledOffers(i).executorId
+              val host = shuffledOffers(i).host
+              if (availableCpus(i) >= CPUS_PER_TASK) {
+                for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
+                  tasks(i) += task
+                  val tid = task.taskId
+                  taskIdToTaskSetId(tid) = taskSet.taskSet.id
+                  taskIdToExecutorId(tid) = execId
+                  activeExecutorIds += execId
+                  executorsByHost(host) += execId
+                  availableCpus(i) -= CPUS_PER_TASK
+                  assert(availableCpus(i) >= 0)
+                  launchedTask = true
+                  logInfo("Task " + task.taskId + " from stage " + taskSet.stageId + " goes to exec " + execId)
+                }
+              }
+            }
+          } while (launchedTask)
+        }
+      }
+    }
+
+    if (tasks.size > 0) {
+      hasLaunchedTask = true
+    }
+    return tasks
+  }
+
 
   def statusUpdate(tid: Long, state: TaskState, serializedData: ByteBuffer) {
     var failedExecutor: Option[String] = None
@@ -364,6 +629,13 @@ private[spark] class TaskSchedulerImpl(
   }
 
   override def defaultParallelism() = backend.defaultParallelism()
+
+  override def updateMapOutput(eId: String,
+    shuffleId: Int,
+    statuses: Array[Byte],
+    index: Int) {
+    backend.updateMapOutput(eId, shuffleId, statuses, index)
+  }
 
   // Check for speculatable tasks in all our active jobs.
   def checkSpeculatableTasks() {

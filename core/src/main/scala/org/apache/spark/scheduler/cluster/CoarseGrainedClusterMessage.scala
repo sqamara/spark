@@ -30,6 +30,9 @@ private[spark] object CoarseGrainedClusterMessages {
   // Driver to executors
   case class LaunchTask(task: TaskDescription) extends CoarseGrainedClusterMessage
 
+  case class UpdateMapOutputExecutor(serializedStatus: Array[Byte], shuffleId: Int, reduceId: Int)
+    extends CoarseGrainedClusterMessage
+
   case class KillTask(taskId: Long, executor: String, interruptThread: Boolean)
     extends CoarseGrainedClusterMessage
 
@@ -39,7 +42,7 @@ private[spark] object CoarseGrainedClusterMessages {
   case class RegisterExecutorFailed(message: String) extends CoarseGrainedClusterMessage
 
   // Executors to driver
-  case class RegisterExecutor(executorId: String, hostPort: String, cores: Int)
+  case class RegisterExecutor(executorId: String, hostPort: String, cores: Int, bw: Double = 100)
     extends CoarseGrainedClusterMessage {
     Utils.checkHostPort(hostPort, "Expected host port")
   }
@@ -56,6 +59,9 @@ private[spark] object CoarseGrainedClusterMessages {
   }
 
   // Internal messages in driver
+  case class UpdateMapOutput(eId: String, shuffleId: Int, statuses: Array[Byte], index: Int)
+    extends CoarseGrainedClusterMessage
+
   case object ReviveOffers extends CoarseGrainedClusterMessage
 
   case object StopDriver extends CoarseGrainedClusterMessage

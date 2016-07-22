@@ -298,4 +298,12 @@ private[spark] class CoarseMesosSchedulerBackend(
     logInfo("Executor lost: %s, marking slave %s as lost".format(e.getValue, s.getValue))
     slaveLost(d, s)
   }
+
+  override def updateMapOutput(eId: String,
+                               shuffleId: Int,
+                               statuses: Array[Byte],
+                               index: Int) {
+    // doing nothing
+    // TODO: implement
+  }
 }

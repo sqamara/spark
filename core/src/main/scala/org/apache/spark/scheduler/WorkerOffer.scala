@@ -22,3 +22,4 @@ package org.apache.spark.scheduler
  */
 private[spark]
 case class WorkerOffer(executorId: String, host: String, cores: Int)
+case class WorkerOfferWithBW(executorId: String, host: String, cores: Int, bw: Double)

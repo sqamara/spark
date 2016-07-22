@@ -20,7 +20,7 @@ package org.apache.spark.storage
 import java.io.{File, InputStream, OutputStream, BufferedOutputStream, ByteArrayOutputStream}
 import java.nio.{ByteBuffer, MappedByteBuffer}
 
-import scala.collection.mutable.{ArrayBuffer, HashMap}
+import scala.collection.mutable.{HashSet, ArrayBuffer, HashMap}
 import scala.concurrent.{Await, Future}
 import scala.concurrent.duration._
 import scala.util.Random
@@ -109,6 +109,10 @@ private[spark] class BlockManager(
   var asyncReregisterTask: Future[Unit] = null
   val asyncReregisterLock = new Object
 
+  private var blockManagerWorker: BlockManagerWorker = null
+
+  private val finishedFetchedBlocks: HashSet[BlockId] = new HashSet[BlockId]
+
   private def heartBeat() {
     if (!master.sendHeartBeat(blockManagerId)) {
       reregister()
@@ -121,6 +125,10 @@ private[spark] class BlockManager(
     MetadataCleanerType.BLOCK_MANAGER, this.dropOldNonBroadcastBlocks, conf)
   private val broadcastCleaner = new MetadataCleaner(
     MetadataCleanerType.BROADCAST_VARS, this.dropOldBroadcastBlocks, conf)
+
+
+  // track blockid to managerid map
+  private val blockToLocMap = new HashMap[BlockId, Seq[BlockManagerId]]
 
   initialize()
 
@@ -152,7 +160,7 @@ private[spark] class BlockManager(
    */
   private def initialize() {
     master.registerBlockManager(blockManagerId, maxMemory, slaveActor)
-    BlockManagerWorker.startBlockManagerWorker(this)
+    blockManagerWorker = BlockManagerWorker.startBlockManagerWorker(this)
     if (!BlockManager.getDisableHeartBeatsForTesting(conf)) {
       heartBeatTask = actorSystem.scheduler.schedule(0.seconds, heartBeatFrequency.milliseconds) {
         Utils.tryOrExit { heartBeat() }
@@ -181,6 +189,13 @@ private[spark] class BlockManager(
     }
   }
 
+
+  /**
+   * get worker
+   */
+  def getWorker(): BlockManagerWorker = {
+    return blockManagerWorker
+  }
   /**
    * Re-register with the master and report all blocks to it. This will be called by the heart beat
    * thread if our heartbeat to the block manager indicates that we were not registered.
@@ -193,6 +208,7 @@ private[spark] class BlockManager(
     master.registerBlockManager(blockManagerId, maxMemory, slaveActor)
     reportAllBlocks()
   }
+
 
   /**
    * Re-register with the master sometime soon.
@@ -323,14 +339,55 @@ private[spark] class BlockManager(
     locations
   }
 
+  def notifyOnFinishedBlocks(idList: Array[BlockId]) {
+    finishedFetchedBlocks.synchronized {
+      for (id <- idList) {
+        finishedFetchedBlocks += id
+      }
+      finishedFetchedBlocks.notifyAll()
+    }
+  }
+
+  def notifyOnDeletedBlocks(idList: Array[BlockId]) {
+    finishedFetchedBlocks.synchronized {
+      for (id <- idList) {
+        finishedFetchedBlocks -= id
+      }
+    }
+  }
+
+  def notifyOnDeletedBlock(id: BlockId) {
+    finishedFetchedBlocks.synchronized {
+      finishedFetchedBlocks -= id
+    }
+  }
+
   /**
    * A short-circuited method to get blocks directly from disk. This is used for getting
    * shuffle blocks. It is safe to do so without a lock on block info since disk store
    * never deletes (recent) items.
    */
   def getLocalFromDisk(blockId: BlockId, serializer: Serializer): Option[Iterator[Any]] = {
-    diskStore.getValues(blockId, serializer).orElse(
-      sys.error("Block " + blockId + " not found on disk, though it should be"))
+    if (blockId.isShuffle) {
+      finishedFetchedBlocks.synchronized {
+        val tBefore = System.currentTimeMillis()
+        while (!finishedFetchedBlocks.contains(blockId)  && System.currentTimeMillis() - tBefore < 300000) {
+          try {
+            finishedFetchedBlocks.wait(1000)
+          } catch {
+            case e: InterruptedException =>
+          }
+        }
+      }
+    }
+    try {
+      diskStore.getValues(blockId, serializer).orElse(
+        sys.error("Block " + blockId + " not found on disk, though it should be"))
+    } catch {
+      case e: Exception =>
+        logDebug("Execption at getLocalFromDisk")
+        None
+    }
   }
 
   /**
@@ -349,11 +406,22 @@ private[spark] class BlockManager(
     // As an optimization for map output fetches, if the block is for a shuffle, return it
     // without acquiring a lock; the disk store never deletes (recent) items so this should work
     if (blockId.isShuffle) {
+      val tBefore = System.currentTimeMillis()
+      finishedFetchedBlocks.synchronized {
+        while (!finishedFetchedBlocks.contains(blockId) && System.currentTimeMillis() - tBefore < 300000) {
+          try {
+            finishedFetchedBlocks.wait(1000)
+          } catch {
+            case e: InterruptedException =>
+          }
+        }
+      }
       diskStore.getBytes(blockId) match {
         case Some(bytes) =>
           Some(bytes)
         case None =>
-          throw new Exception("Block " + blockId + " not found on disk, though it should be")
+          logDebug("Block " + blockId + " not found on disk, though it should be")
+          throw new Exception("Block Unfound On Disk::" + blockId + "::Though it should be")
       }
     } else {
       doGetLocal(blockId, asValues = false).asInstanceOf[Option[ByteBuffer]]
@@ -483,7 +551,13 @@ private[spark] class BlockManager(
 
   private def doGetRemote(blockId: BlockId, asValues: Boolean): Option[Any] = {
     require(blockId != null, "BlockId is null")
-    val locations = Random.shuffle(master.getLocations(blockId))
+    var locations : Seq[BlockManagerId] = null
+    if (blockToLocMap.contains(blockId)) {
+      logInfo("Getting remote block location locally")
+      locations = Random.shuffle(blockToLocMap(blockId))
+    } else {
+      locations = Random.shuffle(master.getLocations(blockId))
+    }
     for (loc <- locations) {
       logDebug("Getting remote block " + blockId + " from " + loc)
       val data = BlockManagerWorker.syncGetBlock(
@@ -499,6 +573,38 @@ private[spark] class BlockManager(
     }
     logDebug("Block " + blockId + " not found")
     None
+  }
+
+  /**
+   * prefetch block from remote block managers.
+   */
+  def getRemote(blockId: BlockId, blockLocs: Seq[BlockManagerId]): Option[Iterator[Any]] = {
+    logInfo("Prefetching remote block " + blockId)
+    doPrefetchRemote(blockId, blockLocs, asValues = true).asInstanceOf[Option[Iterator[Any]]]
+  }
+
+  private def doPrefetchRemote(blockId: BlockId, blockLocs: Seq[BlockManagerId], asValues: Boolean): Option[Any] = {
+    require(blockId != null, "BlockId is null")
+    val locations = Random.shuffle(blockLocs)
+    for (loc <- locations) {
+      logInfo("Prefetch remote block " + blockId + " from " + loc)
+      val data = BlockManagerWorker.syncGetBlock(
+        GetBlock(blockId), ConnectionManagerId(loc.host, loc.port))
+      if (data != null) {
+        if (asValues) {
+          return Some(dataDeserialize(blockId, data))
+        } else {
+          return Some(data)
+        }
+      }
+      logInfo("The value of block " + blockId + " is null")
+    }
+    logInfo("Block " + blockId + " not found")
+    None
+  }
+
+  def saveBlockLoc(blockId: BlockId, blockLocs: Seq[BlockManagerId]) {
+    blockToLocMap.put(blockId, blockLocs)
   }
 
   /**
@@ -536,6 +642,11 @@ private[spark] class BlockManager(
 
     iter.initialize()
     iter
+  }
+
+  def updateFetches(iter: Iterator[Any],
+                   blocksByAddress: Seq[(BlockManagerId, Seq[(BlockId, Long)])]) = {
+    iter.asInstanceOf[BlockFetcherIterator.BasicBlockFetcherIterator].updateFetches(blocksByAddress)
   }
 
   def put(

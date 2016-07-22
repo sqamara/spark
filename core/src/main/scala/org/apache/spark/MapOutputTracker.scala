@@ -34,6 +34,21 @@ private[spark] case class GetMapOutputStatuses(shuffleId: Int)
   extends MapOutputTrackerMessage
 private[spark] case object StopMapOutputTracker extends MapOutputTrackerMessage
 
+/*
+private[spark] case object SendMapOutputStatuses extends MapOutputTrackerMessage
+
+
+/** Actor class for MapOutputTrackerWorker */
+
+private[spark] class MapOutputTrackerMasterActor(tracker: MapOutputTrackerMaster, conf: SparkConf)
+  extends Actor with Logging {
+  val maxAkkaFrameSize = AkkaUtils.maxFrameSizeBytes(conf)
+
+  def receive = {
+    case SendMapOutputStatuses()
+  }
+}
+*/
 /** Actor class for MapOutputTrackerMaster */
 private[spark] class MapOutputTrackerMasterActor(tracker: MapOutputTrackerMaster, conf: SparkConf)
   extends Actor with Logging {
@@ -44,6 +59,14 @@ private[spark] class MapOutputTrackerMasterActor(tracker: MapOutputTrackerMaster
       val hostPort = sender.path.address.hostPort
       logInfo("Asked to send map output locations for shuffle " + shuffleId + " to " + hostPort)
       val mapOutputStatuses = tracker.getSerializedMapOutputStatuses(shuffleId)
+      // log
+      val fetchedStatuses = tracker.getUnserializedMapOutputStatuses(shuffleId)
+      if (fetchedStatuses == null) {
+        logInfo("fetched map output is null")
+      } else {
+        logInfo("status size " + fetchedStatuses.length)
+      }
+      //end log
       val serializedSize = mapOutputStatuses.size
       if (serializedSize > maxAkkaFrameSize) {
         val msg = s"Map output statuses were $serializedSize bytes which " +
@@ -154,7 +177,13 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
           val fetchedBytes =
             askTracker(GetMapOutputStatuses(shuffleId)).asInstanceOf[Array[Byte]]
           fetchedStatuses = MapOutputTracker.deserializeMapStatuses(fetchedBytes)
-          logInfo("Got the output locations")
+          logInfo("Got the output locations" + " length " + fetchedStatuses.length)
+          for (status <- fetchedStatuses) {
+            if (status != null && status.location != null) {
+              logInfo(status.location.toString() + " size : "
+                + MapOutputTracker.decompressSize(status.compressedSizes(0)))
+            }
+          }
           mapStatuses.put(shuffleId, fetchedStatuses)
         } finally {
           fetching.synchronized {
@@ -177,6 +206,20 @@ private[spark] abstract class MapOutputTracker(conf: SparkConf) extends Logging 
       }
     }
   }
+
+  /** called from executor to update the map output information carried in the task */
+  def updateMapStatusesFromTask(bytes: Array[Byte], shuffleId: Int) {
+    logInfo("update fake MapStatusesFromTask " + " for shuffle " + shuffleId)
+    val fetchedStatuses = MapOutputTracker.deserializeMapStatuses(bytes)
+    for (status <- fetchedStatuses) {
+      if (status != null && status.location != null) {
+        logInfo(status.location.toString() + " size : "
+          + MapOutputTracker.decompressSize(status.compressedSizes(0)))
+      }
+    }
+    mapStatuses.put(shuffleId, fetchedStatuses)
+  }
+
 
   /** Called to get current epoch number. */
   def getEpoch: Long = {
@@ -222,10 +265,12 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf)
   /**
    * Timestamp based HashMap for storing mapStatuses and cached serialized statuses in the master,
    * so that statuses are dropped only by explicit de-registering or by TTL-based cleaning (if set).
-   * Other than these two scenarios, nothing should be dropped from this HashMap.
+   * Other than these two scenarios, nothing should be dropped from this HashMap.MapOutputTrackerMasterActor
    */
   protected val mapStatuses = new TimeStampedHashMap[Int, Array[MapStatus]]()
   private val cachedSerializedStatuses = new TimeStampedHashMap[Int, Array[Byte]]()
+
+  protected val fakeMapStatuses = new TimeStampedHashMap[Int, Array[MapStatus]]()
 
   // For cleaning up TimeStampedHashMaps
   private val metadataCleaner =
@@ -246,10 +291,16 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf)
 
   /** Register multiple map output information for the given shuffle */
   def registerMapOutputs(shuffleId: Int, statuses: Array[MapStatus], changeEpoch: Boolean = false) {
+    logInfo("Registering map output information for shuffle " + shuffleId)
     mapStatuses.put(shuffleId, Array[MapStatus]() ++ statuses)
     if (changeEpoch) {
       incrementEpoch()
     }
+  }
+
+  def registerFakeMapOutputs(shuffleId: Int, statuses: Array[MapStatus]) {
+    logInfo("Registering fake map output information for shuffle " + shuffleId)
+    fakeMapStatuses.put(shuffleId, Array[MapStatus]() ++ statuses)
   }
 
   /** Unregister map output information of the given shuffle, mapper and block manager */
@@ -279,6 +330,11 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf)
     cachedSerializedStatuses.contains(shuffleId) || mapStatuses.contains(shuffleId)
   }
 
+  /** Check if the given fake shuffle is being tracked */
+  def containsFakeShuffle(shuffleId: Int): Boolean = {
+    fakeMapStatuses.contains(shuffleId)
+  }
+
   def incrementEpoch() {
     epochLock.synchronized {
       epoch += 1
@@ -299,6 +355,8 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf)
           return bytes
         case None =>
           statuses = mapStatuses.getOrElse(shuffleId, Array[MapStatus]())
+          logInfo("mapStatuses contains shuffle " + shuffleId + " : "
+            + mapStatuses.contains(shuffleId) + " ret length: " + statuses.length)
           epochGotten = epoch
       }
     }
@@ -313,6 +371,32 @@ private[spark] class MapOutputTrackerMaster(conf: SparkConf)
       }
     }
     bytes
+  }
+
+  def getUnserializedMapOutputStatuses(shuffleId: Int): Array[MapStatus] = {
+    // read only
+    var statuses: Array[MapStatus] = null
+    statuses = mapStatuses.getOrElse(shuffleId, Array[MapStatus]())
+    return statuses
+  }
+
+  def getFakeSerMapOutputStatuses(shuffleId: Int): Array[Byte] = {
+    // read only
+    var statuses: Array[MapStatus] = null
+    statuses = fakeMapStatuses.getOrElse(shuffleId, Array[MapStatus]())
+    val bytes = MapOutputTracker.serializeMapStatuses(statuses)
+    bytes
+  }
+
+  def getUnserializedFakeSerMapOutputStatuses(shuffleId: Int): Array[MapStatus] = {
+    // read only
+    var statuses: Array[MapStatus] = null
+    statuses = fakeMapStatuses.getOrElse(shuffleId, Array[MapStatus]())
+    statuses
+  }
+
+  def checkFakeMapOutputStatuses(shuffleId: Int): Boolean = {
+    return fakeMapStatuses.contains(shuffleId)
   }
 
   override def stop() {
@@ -373,8 +457,11 @@ private[spark] object MapOutputTracker {
         if (status == null) {
           throw new FetchFailedException(null, shuffleId, -1, reduceId,
             new Exception("Missing an output location for shuffle " + shuffleId))
-        } else {
+        } else if (reduceId < status.compressedSizes.length){
           (status.location, decompressSize(status.compressedSizes(reduceId)))
+          //(status.location, decompressSize(status.compressedSizes(0)))
+        } else {
+          (status.location, decompressSize(status.compressedSizes(0)))
         }
     }
   }

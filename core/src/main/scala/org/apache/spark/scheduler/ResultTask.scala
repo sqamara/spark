@@ -25,6 +25,7 @@ import scala.language.existentials
 
 import org.apache.spark._
 import org.apache.spark.rdd.{RDD, RDDCheckpointData}
+import org.apache.spark.storage.{BlockId, BlockManagerId}
 
 private[spark] object ResultTask {
 
@@ -130,6 +131,10 @@ private[spark] class ResultTask[T, U](
       out.writeInt(outputId)
       out.writeLong(epoch)
       out.writeObject(split)
+      out.writeInt(shuffleId)
+      out.writeObject(serializedMapStatuses)
+      out.writeObject(blockId)
+      out.writeObject(blockManagerId)
     }
   }
 
@@ -145,5 +150,9 @@ private[spark] class ResultTask[T, U](
     outputId = in.readInt()
     epoch = in.readLong()
     split = in.readObject().asInstanceOf[Partition]
+    shuffleId = in.readInt()
+    serializedMapStatuses = in.readObject().asInstanceOf[Array[Byte]]
+    blockId = in.readObject().asInstanceOf[BlockId]
+    blockManagerId = in.readObject().asInstanceOf[Seq[BlockManagerId]]
   }
 }

@@ -82,6 +82,7 @@ private[spark] class TaskSetManager(
   private val failedExecutors = new HashMap[Int, HashMap[String, Long]]()
   val taskAttempts = Array.fill[List[TaskInfo]](numTasks)(Nil)
   var tasksSuccessful = 0
+  var tasksLaunched = 0
 
   var weight = 1
   var minShare = 0
@@ -253,6 +254,26 @@ private[spark] class TaskSetManager(
     None
   }
 
+  /**
+   *  index version
+   */
+  private def findTaskWithIndexFromList(execId: String, index: Int, list: ArrayBuffer[Int]): Option[Int] = {
+    val indexOffset = list.indexOf(index)
+    if (indexOffset < 0) {
+      logError("task index not exist in pending tasks")
+    }
+    if (!executorIsBlacklisted(execId, index)) {
+      // This should almost always be list.trimEnd(1) to remove tail
+      list.remove(indexOffset)
+      if (copiesRunning(index) == 0 && !successful(index)) {
+        return Some(index)
+      } else {
+        logError("specified index already running")
+      }
+    }
+    None
+  }
+
   /** Check whether a task is currently running an attempt on a given host */
   private def hasAttemptOnHost(taskIndex: Int, host: String): Boolean = {
     taskAttempts(taskIndex).exists(_.host == host)
@@ -335,6 +356,17 @@ private[spark] class TaskSetManager(
   }
 
   /**
+   *
+   */
+  private def findTaskWithIndex(execId: String, index: Int)
+  : Option[(Int, TaskLocality.Value)] = {
+    for (index <- findTaskWithIndexFromList(execId, index, allPendingTasks)) {
+      return Some((index, TaskLocality.ANY))
+    }
+    None
+  }
+
+  /**
    * Dequeue a pending task for a given node and return its index and locality level.
    * Only search for tasks matching the given locality constraint.
    */
@@ -376,6 +408,60 @@ private[spark] class TaskSetManager(
   }
 
   /**
+   * index version of resourceOffer
+   */
+  def resourceOfferWithIndex(
+                     execId: String,
+                     host: String,
+                     index: Int)
+  : Option[TaskDescription] =
+  {
+    if (!isZombie) {
+      val curTime = clock.getTime()
+      findTaskWithIndex(execId, index) match {
+        case Some((index, taskLocality)) => {
+          // Found a task; do some bookkeeping and return a task description
+          val task = tasks(index)
+          val taskId = sched.newTaskId()
+          logInfo("find resource for task " + taskId + " shuffleId" + task.shuffleId)
+          // Figure out whether this should count as a preferred launch
+          logInfo("Starting task %s:%d as TID %s on executor %s: %s (%s)".format(
+            taskSet.id, index, taskId, execId, host, taskLocality))
+          // Do various bookkeeping
+          copiesRunning(index) += 1
+          val info = new TaskInfo(taskId, index, curTime, execId, host, taskLocality)
+          taskInfos(taskId) = info
+          taskAttempts(index) = info :: taskAttempts(index)
+          // Update our locality level for delay scheduling
+          currentLocalityIndex = getLocalityIndex(taskLocality)
+          lastLaunchTime = curTime
+          // Serialize and return the task
+          val startTime = clock.getTime()
+          // We rely on the DAGScheduler to catch non-serializable closures and RDDs, so in here
+          // we assume the task can be serialized without exceptions.
+          val serializedTask = Task.serializeWithDependencies(
+            task, sched.sc.addedFiles, sched.sc.addedJars, ser)
+
+          val timeTaken = clock.getTime() - startTime
+          addRunningTask(taskId)
+          logInfo("Serialized task %s:%d as %d bytes in %d ms".format(
+            taskSet.id, index, serializedTask.limit, timeTaken))
+          val taskName = "task %s:%d".format(taskSet.id, index)
+          sched.dagScheduler.taskStarted(task, info)
+          tasksLaunched += 1
+          if (tasksLaunched >= tasks.length) {
+            logInfo("all tasks launched, tell the dag")
+            sched.dagScheduler.tasksAllStarted(stageId, taskInfos)
+          }
+          return Some(new TaskDescription(taskId, execId, taskName, index, task.shuffleId, task.serializedMapStatuses, serializedTask))
+        }
+        case _ =>
+      }
+    }
+    None
+  }
+
+  /**
    * Respond to an offer of a single executor from the scheduler by finding a task
    */
   def resourceOffer(
@@ -397,6 +483,7 @@ private[spark] class TaskSetManager(
           // Found a task; do some bookkeeping and return a task description
           val task = tasks(index)
           val taskId = sched.newTaskId()
+          logInfo("find resource for task " + taskId + " shuffleId" + task.shuffleId)
           // Figure out whether this should count as a preferred launch
           logInfo("Starting task %s:%d as TID %s on executor %s: %s (%s)".format(
             taskSet.id, index, taskId, execId, host, taskLocality))
@@ -414,13 +501,19 @@ private[spark] class TaskSetManager(
           // we assume the task can be serialized without exceptions.
           val serializedTask = Task.serializeWithDependencies(
             task, sched.sc.addedFiles, sched.sc.addedJars, ser)
+
           val timeTaken = clock.getTime() - startTime
           addRunningTask(taskId)
           logInfo("Serialized task %s:%d as %d bytes in %d ms".format(
             taskSet.id, index, serializedTask.limit, timeTaken))
           val taskName = "task %s:%d".format(taskSet.id, index)
           sched.dagScheduler.taskStarted(task, info)
-          return Some(new TaskDescription(taskId, execId, taskName, index, serializedTask))
+          tasksLaunched += 1
+          if (tasksLaunched >= tasks.length) {
+            logInfo("all tasks launched, tell the dag")
+            sched.dagScheduler.tasksAllStarted(stageId, taskInfos)
+          }
+          return Some(new TaskDescription(taskId, execId, taskName, index, task.shuffleId, task.serializedMapStatuses, serializedTask))
         }
         case _ =>
       }
