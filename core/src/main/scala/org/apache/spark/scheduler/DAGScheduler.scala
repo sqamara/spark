@@ -572,11 +572,13 @@ class DAGScheduler(
         "Attempting to access a non-existent partition: " + p + ". " +
           "Total number of partitions: " + maxPartitions)
     }
+
     val jobId = nextJobId.getAndIncrement()
     if (partitions.size == 0) {
       // Return immediately if the job is running 0 tasks
       return new JobWaiter[U](this, jobId, 0, resultHandler)
     }
+
     assert(partitions.size > 0)
     val func2 = func.asInstanceOf[(TaskContext, Iterator[_]) => _]
     val waiter = new JobWaiter(this, jobId, partitions.size, resultHandler)
@@ -615,7 +617,6 @@ class DAGScheduler(
           (waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
 
         logError(taskGraph.toString())
-        logError(rdd.toDebugString)
 
       case JobFailed(exception: Exception) =>
         logInfo("Job %d failed: %s, took %f s".format
@@ -1137,38 +1138,10 @@ class DAGScheduler(
       // Skip all the actions if the stage has been cancelled.
       return
     }
+
+    taskGraph.addTaskToHash(event.taskInfo.taskId, stageId)
+
     val stage = stageIdToStage(task.stageId)
-
-    logError("TASK PASSED")
-    logError("stageID: " + stageId)
-    logError("taskType: " + taskType)
-    logError("event.reason: " + event.reason)
-    logError("task.partitionId " + task.partitionId)
-    logError("event.taskInfo: " + event.taskInfo)
-    logError("event.taskMetrics: " + event.taskMetrics)
-    // TODO: a stage contains a hashset of multiple jobs that depend on it, so multiple nodes should be created
-    /* class TaskNode(   
-      val taskId: Int, 
-      val stageId: Int, 
-      val partitionIndex: Int, 
-      val JobIds: HashSet[Int], 
-      val rddId: Int, 
-      val metrics: TaskMetrics) {*/
-    taskGraph.addTask(new TaskNode(
-      event.taskInfo.taskId.toInt, 
-      stageId, 
-      event.taskInfo.index,
-      task.partitionId, 
-      stage.firstJobId,
-      // stage.jobIds,
-      stage.rdd.id, 
-      event.taskMetrics))
-
-    // logError("stage.firstJobId:" + stage.firstJobId)
-
-    val parentStages: List[Stage] = getParentStages(stage.rdd, stage.firstJobId)
-    logError("parentStages: " + parentStages)
-
     event.reason match {
       case Success =>
         listenerBus.post(SparkListenerTaskEnd(stageId, stage.latestInfo.attemptId, taskType,
@@ -1226,6 +1199,8 @@ class DAGScheduler(
               logInfo("waiting: " + waitingStages)
               logInfo("failed: " + failedStages)
 
+              taskGraph.addShuffleStage(shuffleStage ,getParentStages(shuffleStage.rdd, shuffleStage.firstJobId))
+
               // We supply true to increment the epoch number here in case this is a
               // recomputation of the map outputs. In that case, some nodes may have cached
               // locations with holes (from when we detected the error) and will need the
@@ -1236,18 +1211,6 @@ class DAGScheduler(
                 shuffleStage.shuffleDep.shuffleId,
                 shuffleStage.outputLocInMapOutputTrackerFormat(),
                 changeEpoch = true)
-
-              // the shuffle id
-              logError("shuffleStage.shuffleDep.shuffleId: " + shuffleStage.shuffleDep.shuffleId)
-              // the map status for each stage of this shuffle
-              val mapStatuses: Array[MapStatus] = shuffleStage.outputLocInMapOutputTrackerFormat()
-              for (i <- 0 to (mapStatuses.length-1)) {
-                logError("MapStatus for " + i + ": " + mapStatuses(i).location.toString)
-                for (j <- 0 to mapStatuses.length-1) {  // TODO: confirm that the output partitions is the same is the input
-                 logError( "\t" + "getSizeForBlock: " + j + " " + mapStatuses(i).getSizeForBlock(j))
-                }
-              }
-              // logError("parent rdd: " + shuffleStage.rdd)
 
               clearCacheLocs()
 
@@ -1267,8 +1230,6 @@ class DAGScheduler(
                   }
                 }
               }
-
-              logError("MapOutputStatistics " + mapOutputTracker.getStatistics(shuffleStage.shuffleDep).bytesByPartitionId.mkString(" "))
 
               // Note: newly runnable stages will be submitted below when we submit waiting stages
             }
@@ -1712,59 +1673,90 @@ private[spark] object DAGScheduler {
   // this is a simplistic way to avoid resubmitting tasks in the non-fetchable map stage one by one
   // as more failure events come in
   val RESUBMIT_TIMEOUT = 200
-
 }
 
-
-
-/* building a dag of tasks */
 import scala.collection.mutable.ListBuffer
-// taskId
-// stageId
-// partitionIndex
-// jobId's
-// rddId
-// taskMetrics
+
 class TaskNode(
-    val taskId: Int, 
+    val taskId: Long,
     val stageId: Int,
-    val index: Int,
-    val partitionId: Int, 
-    val jobIds: Int, // first job that ran it
-    //val jobIds: HashSet[Int], 
-    val rddId: Int, 
-    val metrics: TaskMetrics) {
+    val firstJobId: Int,
+    // val partitionCount: Int,
+    val outputForPartition: Array[Long],
+    val parentStagesIds: Array[Int],
+    val parentTasks: Array[Long]) {
 
-  /* dependencies can beformed from the rdd getDependencies 
-     the output size of a task is within its TaskMetrics
-     */
-
-  override def toString(): String = {
-    var toReturn = "taskId: " + taskId + ", stageId: " + stageId + 
-    ", index: " + index + ", partitionId: " + partitionId + ", jobIds: " + 
-    jobIds + ", rddId: " + rddId
-    toReturn
-  }
-}
-
-// TODO: replace this ListBuffer with a set because if 2 or more jobs are dependent on a task
-// it will be added multiple times to this JobTask because of @1148
-class TaskGraph() {
-  
-  var nodes: HashSet[TaskNode] = HashSet[TaskNode]()
-  
-  def addTask(taskNode: TaskNode) {
-    nodes += taskNode
-  }
-
-  override def toString(): String = {
-    var toReturn: String = "TaskGraph\n"
-      for (node <- nodes) {
-        toReturn += "\t" + node.toString() + "\n"
+    override def toString(): String = {
+      var toReturn: String = ""
+      toReturn += "Task(" + taskId + ") is dependent on tasks( " + parentTasks.mkString(" ") + ") and outputs "
+      for (i <- 0 to (outputForPartition.length-1)) {
+        toReturn += outputForPartition(i) + " to partition " + i 
+        if (i < (outputForPartition.length-1))
+          toReturn += ", "
       }
-    toReturn
-  }
+      toReturn
+    }
 }
 
+class TaskGraph() {
+  val stageIdToTasks: HashMap[Int, ListBuffer[Long]] = new HashMap[Int, ListBuffer[Long]]()
+  //you could centralize the stage data on the graph so each task does not need to hold them
+  val taskNodes: ListBuffer[TaskNode] = new ListBuffer[TaskNode]()
+
+  // add tasks to the task Hashmap so that when the 
+  // task finishes so that stage-task dependencies can be made
+  def addTaskToHash(taskId: Long, stageId: Int) {  
+    if (stageIdToTasks.contains(stageId))
+      stageIdToTasks.get(stageId).get += taskId
+    else {
+      stageIdToTasks += stageId -> new ListBuffer[Long]()
+      stageIdToTasks.get(stageId).get += taskId
+    }
+  }
+
+  //TODO: add result stages to the graph
+  //TODO: ensure duplicate stages do not get added
+
+  // added to the graph when the whole stage is complete
+  def addShuffleStage(stage: ShuffleMapStage, parentStages: List[Stage]) {
+    val mapStatuses: Array[MapStatus] = stage.outputLocInMapOutputTrackerFormat()
+    var outputsForPartitions: Array[Array[Long]] = Array.ofDim[Long](mapStatuses.length, mapStatuses.length)
+    for (i <- 0 to (mapStatuses.length-1))
+        for (j <- 0 to (mapStatuses.length-1)) 
+          outputsForPartitions(i)(j) = mapStatuses(i).getSizeForBlock(j)
+
+    // val parentStages: List[Stage] = getParentStages(stage.rdd, stage.firstJobId)
+    val parentStagesIds: Array[Int] = parentStages.map(stage => stage.id).toArray
+
+    val parentTasksIds: ListBuffer[Long] = new ListBuffer[Long]()
+    for (parentStageId <- parentStagesIds) {
+      for (parentTask <- stageIdToTasks.get(parentStageId).get){
+        parentTasksIds += parentTask
+      }
+    }
+
+    val newTasks: ListBuffer[Long] = stageIdToTasks.get(stage.id).get.sorted
+    for (i <- 0 to (newTasks.size-1)) {
+      taskNodes += new TaskNode(
+          newTasks(i),
+          stage.id,
+          stage.firstJobId,
+          // stage.numTasks,
+          outputsForPartitions(i), // based on the fact that the lower taskId has the lower partition
+          parentStagesIds,
+          parentTasksIds.toArray)
+    }
+  }
+
+  override def toString(): String = {
+    var toReturn: String = ""
+    toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + taskNodes.size + " tasks\n"
+    for (i <- 0 to (taskNodes.size-1))
+      toReturn += "\t" + taskNodes(i).toString + "\n"
+    toReturn += "but is still missing ResultTasks"
+    toReturn
+  }
 
 
+
+}
