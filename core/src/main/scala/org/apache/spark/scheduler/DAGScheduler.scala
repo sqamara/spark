@@ -1166,6 +1166,9 @@ class DAGScheduler(
 
     // logError("stage.firstJobId:" + stage.firstJobId)
 
+    val parentStages: List[Stage] = getParentStages(stage.rdd, stage.firstJobId)
+    logError("parentStages: " + parentStages)
+
     event.reason match {
       case Success =>
         listenerBus.post(SparkListenerTaskEnd(stageId, stage.latestInfo.attemptId, taskType,
@@ -1233,6 +1236,18 @@ class DAGScheduler(
                 shuffleStage.shuffleDep.shuffleId,
                 shuffleStage.outputLocInMapOutputTrackerFormat(),
                 changeEpoch = true)
+
+              // the shuffle id
+              logError("shuffleStage.shuffleDep.shuffleId: " + shuffleStage.shuffleDep.shuffleId)
+              // the map status for each stage of this shuffle
+              val mapStatuses: Array[MapStatus] = shuffleStage.outputLocInMapOutputTrackerFormat()
+              for (i <- 0 to (mapStatuses.length-1)) {
+                logError("MapStatus for " + i + ": " + mapStatuses(i).location.toString)
+                for (j <- 0 to mapStatuses.length-1) {  // TODO: confirm that the output partitions is the same is the input
+                 logError( "\t" + "getSizeForBlock: " + j + " " + mapStatuses(i).getSizeForBlock(j))
+                }
+              }
+              // logError("parent rdd: " + shuffleStage.rdd)
 
               clearCacheLocs()
 
