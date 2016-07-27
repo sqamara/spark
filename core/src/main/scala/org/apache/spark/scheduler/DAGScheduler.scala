@@ -1683,19 +1683,30 @@ private[spark] object DAGScheduler {
 
 import scala.collection.mutable.TreeSet // used to hold sorted Id's
 
+// each Node holds it's parents instead of children because it was easier/ faster to implement that way
+// if each node were to hold its child then on would access the taskNodes hashmap each time a new node is made
+// this may be better
 class TaskNode(
 	val taskId: Long,
 	val stageId: Int,
 	val firstJobId: Int,
 	val partitionId: Int,
     // val partitionCount: Int,
-    val outputForPartition: Array[Long],
-    val parentStagesIds: Array[Int],
-    val parentTasksIds: Array[Long]) {
+    val outputForPartition: Array[Long]
+    // val parentStagesIds: Array[Int],
+    // val parentTasksIds: Array[Long]
+    ) 
+{
+
+	// initialize an empty child task set which will be populated as more stages complete
+	var childTaskIds: TreeSet[Long] = new TreeSet[Long]()
+	def addChild(childTaskId: Long) {
+		childTaskIds += childTaskId
+	}
 
 	override def toString(): String = {
 		var toReturn: String = ""
-		toReturn += "Task(" + taskId + ") is dependent on tasks( " + parentTasksIds.mkString(" ") + " ) and outputs "
+		toReturn += "Task(" + taskId + ") has child tasks( " + childTaskIds.mkString(" ") + " ) and outputs "
 		for (i <- 0 to (outputForPartition.length-1)) {
 			toReturn += outputForPartition(i) + " to par " + i 
 			if (i < (outputForPartition.length-1))
@@ -1718,6 +1729,7 @@ class TaskGraph() {
   // same shuffleId, we can then refrence the first stage to complete the shuffle
   val shuffleIdToStageId: HashMap[Int, Int] = new HashMap[Int, Int]()
   
+
   // populates stageIdToTasks HashMap, called at task completetion
   def addTaskToHash(taskId: Long, stageId: Int) {  
   	if (stageIdToTasks.contains(stageId))
@@ -1735,7 +1747,7 @@ class TaskGraph() {
 
   	val parentStagesIds: Array[Int] = parentStages.map(stage => stage.id).toArray
 
-  	val parentTasksIds: TreeSet[Long] = new TreeSet[Long]()
+  	val parentTasksIds: TreeSet[Long] = new TreeSet[Long]() // does not need to be a treeset could be a list buffer
   	for (parentStageId <- parentStagesIds) {
   		if (stageIdToTasks.get(parentStageId) != None) {
   			for (parentTask <- stageIdToTasks.get(parentStageId).get){
@@ -1772,10 +1784,14 @@ class TaskGraph() {
   					stage.firstJobId,
   					i, // based on the fact that the lower taskId has the lower partition
 				// stage.numTasks,
-				outputsForPartitions(i), // based on the fact that the lower taskId has the lower partition
-				parentStagesIds,
-				parentTasksIds.toArray)
+				outputsForPartitions(i) // based on the fact that the lower taskId has the lower partition
+				// parentStagesIds,
+				// parentTasksIds.toArray
+				)
   			}
+
+  			// MAYBE add this node as achild to the start node if this node has no parents
+
   			case rt: ResultStage => {
   				taskNodes += newTasks(i) -> new TaskNode(
   					newTasks(i),
@@ -1783,13 +1799,24 @@ class TaskGraph() {
   					stage.firstJobId,
   					i,
 				// stage.numTasks,
-				new Array[Long](0), // TODO: locate where these result tasks are actually writing
-				parentStagesIds,
-				parentTasksIds.toArray)  				
+				new Array[Long](0) // TODO: locate where these result tasks are actually writing
+				// parentStagesIds,
+				// parentTasksIds.toArray
+				)
+
+			// MAYBE set this node's childre to be the end node
+
   			}
+  		}
+  		for (parentTasksId <- parentTasksIds) {
+  			forTaskNodeAddChild(parentTasksId, newTasks(i))
   		}
   	// println(stage.id + ": " + "added task " + newTasks(i) + " part " + i)
   	}
+  }
+
+  def forTaskNodeAddChild(parentTaskNodeId: Long, childTaskNodeId: Long) {
+  	taskNodes.get(parentTaskNodeId).get.addChild(childTaskNodeId)
   }
 
   // called iff there was a stage already processed with the same shuffle dependency
@@ -1801,26 +1828,28 @@ class TaskGraph() {
 
   // loging tool to show how much memory is moved between tasks
   def getMemFromParentToChild(parent: Long, child: Long): String = {
-  	if (!taskNodes.contains(child) || !taskNodes.contains(parent))
-  		return "one or more tasks are invalid"
-  	else if (parent > child)
-  		return "child task cannot come before parent"
-  	else if (taskNodes.get(child).get.parentTasksIds.contains(parent)) {
-  		val childTaskNode: TaskNode = taskNodes.get(child).get
-  		val parentTaskNode: TaskNode = taskNodes.get(parent).get
-  		  	// print("\tstageId: " + childTaskNode.stageId + " child task: " + childTaskNode.taskId + " partitionId: " + childTaskNode.partitionId + " parent task: " + 
-					// parentTaskNode.taskId + " num out part: " + parentTaskNode.outputForPartition.length)
-  			return "data sent from task " + parent + " to task " + child + " is " +
-  				parentTaskNode.outputForPartition(childTaskNode.partitionId) + " bytes"
-  	}
-  	else
-  		return "this child task is not dependent on this parent task"
+  	// if (!taskNodes.contains(child) || !taskNodes.contains(parent))
+  	// 	return "one or more tasks are invalid"
+  	// else if (parent > child)
+  	// 	return "child task cannot come before parent"
+  	// else if (taskNodes.get(child).get.parentTasksIds.contains(parent)) {
+  	// 	val childTaskNode: TaskNode = taskNodes.get(child).get
+  	// 	val parentTaskNode: TaskNode = taskNodes.get(parent).get
+  	// 	  	// print("\tstageId: " + childTaskNode.stageId + " child task: " + childTaskNode.taskId + " partitionId: " + childTaskNode.partitionId + " parent task: " + 
+			// 		// parentTaskNode.taskId + " num out part: " + parentTaskNode.outputForPartition.length)
+  	// 		return "data sent from task " + parent + " to task " + child + " is " +
+  	// 			parentTaskNode.outputForPartition(childTaskNode.partitionId) + " bytes"
+  	// }
+  	// else
+  	// 	return "this child task is not dependent on this parent task"
+
+  	return "data sent from task " + parent + " to task " + child + " is " + taskNodes.get(parent).get.outputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
   def printTaskDataDependencies() = {
-  	for (childTaskId <- 0 to (taskNodes.size-1)) {
-  		val childTaskNode: TaskNode = taskNodes.get(childTaskId).get
-  		for (parentTaskId <- childTaskNode.parentTasksIds) {
+  	for (parentTaskId <- 0 to (taskNodes.size-1)) {
+  		val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+  		for (childTaskId <- parentTaskNode.childTaskIds) {
   			println(getMemFromParentToChild(parentTaskId, childTaskId))
   		}
   	}
