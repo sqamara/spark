@@ -1,0 +1,4 @@
+val rdd0 = sc.textFile("/Users/sebastian/Projects/spark-1.6.2/README.MD", 13).flatMap(line => line.split(" ")).map(word => (word, 1)).reduceByKey(_+_)
+rdd0.collect
+val rdd1 = rdd0.coalesce(2).map(a => (a._2, a._2)).reduceByKey(_+_)
+rdd1.collect

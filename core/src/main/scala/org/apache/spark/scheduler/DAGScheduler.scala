@@ -1686,8 +1686,8 @@ import scala.collection.mutable.TreeSet // used to hold sorted Id's
 class TaskNode(
 	val taskId: Long,
 	val stageId: Int,
-	val partitionId: Int,
 	val firstJobId: Int,
+	val partitionId: Int,
     // val partitionCount: Int,
     val outputForPartition: Array[Long],
     val parentStagesIds: Array[Int],
@@ -1695,7 +1695,7 @@ class TaskNode(
 
 	override def toString(): String = {
 		var toReturn: String = ""
-		toReturn += "Task(" + taskId + ") is dependent on tasks( " + parentTasksIds.mkString(" ") + " ) and outputs "
+		toReturn += "Task(" + taskId + ") [pId = " + partitionId + "] is dependent on tasks( " + parentTasksIds.mkString(" ") + " ) and outputs "
 		for (i <- 0 to (outputForPartition.length-1)) {
 			toReturn += outputForPartition(i) + " to partition " + i 
 			if (i < (outputForPartition.length-1))
@@ -1747,7 +1747,6 @@ class TaskGraph() {
   	}
 
   	val newTasks: Array[Long] = stageIdToTasks.get(stage.id).get.toArray
-
   	var outputsForPartitions: Array[Array[Long]] = new Array[Array[Long]](0)
   	stage match {
   		case smt : ShuffleMapStage => {
@@ -1789,6 +1788,7 @@ class TaskGraph() {
 				parentTasksIds.toArray)  				
   			}
   		}
+  	println(stage.id + ": " + "added task " + newTasks(i) + " part " + i)
   	}
   }
 
@@ -1808,6 +1808,8 @@ class TaskGraph() {
   	else if (taskNodes.get(child).get.parentTasksIds.contains(parent)) {
   		val childTaskNode: TaskNode = taskNodes.get(child).get
   		val parentTaskNode: TaskNode = taskNodes.get(parent).get
+  		  	print("\tstageId: " + childTaskNode.stageId + " child task: " + childTaskNode.taskId + " partitionId: " + childTaskNode.partitionId + " parent task: " + 
+					parentTaskNode.taskId + " num out part: " + parentTaskNode.outputForPartition.length)
   			return "data sent from task " + parent + " to task " + child + " is " +
   				parentTaskNode.outputForPartition(childTaskNode.partitionId) + " bytes"
   	}
@@ -1826,11 +1828,22 @@ class TaskGraph() {
 
   // prints so of the graph info and calls the toString of each node
   override def toString(): String = {
+  	printStageTaskGroupings()
+
   	var toReturn: String = ""
   	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + taskNodes.size + " tasks\n"
   	for (i <- 0 to (taskNodes.size-1))
   	toReturn += "\t" + taskNodes(i).toString + "\n"
   	toReturn
+  }
+
+  def printStageTaskGroupings() {
+    for ((k,v) <- stageIdToTasks) {
+    	print(k + " ")
+    	for (t <- v)
+    	  print(t + " ")
+    	println()
+    }
   }
 
 }
