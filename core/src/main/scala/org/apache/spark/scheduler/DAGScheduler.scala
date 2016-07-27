@@ -1142,12 +1142,10 @@ private[scheduler] def handleJobSubmitted(jobId: Int,
       // Skip all the actions if the stage has been cancelled.
       return
   }
-
-  taskGraph.addTaskToHash(event.taskInfo.taskId, stageId)
-
   val stage = stageIdToStage(task.stageId)
   event.reason match {
   	case Success =>
+  	taskGraph.addTaskToHash(event.taskInfo.taskId, stageId)
   	listenerBus.post(SparkListenerTaskEnd(stageId, stage.latestInfo.attemptId, taskType,
   		event.reason, event.taskInfo, event.taskMetrics))
   	stage.pendingPartitions -= task.partitionId
@@ -1683,7 +1681,7 @@ private[spark] object DAGScheduler {
   val RESUBMIT_TIMEOUT = 200
 }
 
-import scala.collection.mutable.TreeSet
+import scala.collection.mutable.TreeSet // used to hold sorted Id's
 
 class TaskNode(
 	val taskId: Long,
@@ -1712,11 +1710,15 @@ class TaskGraph() {
   // have access to it's task Id's
   val stageIdToTasks: HashMap[Int, TreeSet[Long]] = new HashMap[Int, TreeSet[Long]]()
 
-  // 
+  // Task data hashed by taskId
   val taskNodes: HashMap[Long, TaskNode] = new HashMap[Long, TaskNode]()
+
+  // after each shuffle stage completion the stageId is hashed to the shuffleId
+  // so that if another shuffle comes with the same dependency and therefore 
+  // same shuffleId, we can then refrence the first stage to complete the shuffle
   val shuffleIdToStageId: HashMap[Int, Int] = new HashMap[Int, Int]()
-  // add tasks to the task Hashmap so that when the 
-  // task finishes so that stage-task dependencies can be made
+  
+  // populates stageIdToTasks HashMap, called at task completetion
   def addTaskToHash(taskId: Long, stageId: Int) {  
   	if (stageIdToTasks.contains(stageId))
   	stageIdToTasks.get(stageId).get += taskId
@@ -1726,7 +1728,9 @@ class TaskGraph() {
   	}
   }
 
-  // added to the graph when the whole stage is complete
+  // called after stage completetion
+  // used to populate the graph with taskNodes within this stage
+  // determines all the task dependencies base on the parent stages
   def addStage(stage: Stage, parentStages: List[Stage]) {
 
   	val parentStagesIds: Array[Int] = parentStages.map(stage => stage.id).toArray
@@ -1738,7 +1742,7 @@ class TaskGraph() {
   				parentTasksIds += parentTask
   			}
   		}
-  		else 
+  		else // should never happen
   		println("\n\nIssue with non existing stage " + parentStageId + "\n\n")
   	}
 
@@ -1748,6 +1752,7 @@ class TaskGraph() {
   	stage match {
   		case smt : ShuffleMapStage => {
   			val shuffleStage = stage.asInstanceOf[ShuffleMapStage]
+  			// populate the shuffleIdToStageId HashMap
   			shuffleIdToStageId += shuffleStage.shuffleDep.shuffleId -> stage.id
   			val mapStatuses: Array[MapStatus] = shuffleStage.outputLocInMapOutputTrackerFormat()
   			outputsForPartitions = Array.ofDim[Long](mapStatuses.length, mapStatuses.length)
@@ -1786,10 +1791,15 @@ class TaskGraph() {
   		}
   	}
   }
+
+  // called iff there was a stage already processed with the same shuffle dependency
+  // maps the prev stageId's tasks to the new stageId so that task dependencies can be made from
+  // this new stage.
   def addRepeatedShuffleStage(shuffleId: Int, stageId: Int){ 
   	stageIdToTasks += stageId -> stageIdToTasks.get( shuffleIdToStageId.get(shuffleId).get ).get
   }
 
+  // loging tool to show how much memory is moved between tasks
   def getMemFromParentToChild(parent: Long, child: Long): String = {
   	if (!taskNodes.contains(child) || !taskNodes.contains(parent))
   		return "one or more tasks are invalid"
@@ -1798,14 +1808,13 @@ class TaskGraph() {
   	else if (taskNodes.get(child).get.parentTasksIds.contains(parent)) {
   		val childTaskNode: TaskNode = taskNodes.get(child).get
   		val parentTaskNode: TaskNode = taskNodes.get(parent).get
-  			print("\tchild task: " + childTaskNode.taskId + " partitionId: " + childTaskNode.partitionId + " parent task: " + parentTaskNode.taskId + " num out part: " + parentTaskNode.outputForPartition.length)
   			return "data sent from task " + parent + " to task " + child + " is " +
   				parentTaskNode.outputForPartition(childTaskNode.partitionId) + " bytes"
   	}
   	else
   		return "this child task is not dependent on this parent task"
   }
-
+  // loging tool to show how much memory is moved between each and every tasks with dep
   def printTaskDataDependencies() = {
   	for (childTaskId <- 0 to (taskNodes.size-1)) {
   		val childTaskNode: TaskNode = taskNodes.get(childTaskId).get
@@ -1815,7 +1824,7 @@ class TaskGraph() {
   	}
   }
 
-
+  // prints so of the graph info and calls the toString of each node
   override def toString(): String = {
   	var toReturn: String = ""
   	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + taskNodes.size + " tasks\n"
