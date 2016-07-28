@@ -619,7 +619,10 @@ job.finalStage match {
    		logInfo("Job %d finished: %s, took %f s".format
    			(waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
 
-   		logError(taskGraph.toString())
+   		println(taskGraph.toString())
+   		taskGraph.dfs()
+   		taskGraph.keepCutting()
+   		taskGraph.dfs()
    		taskGraph.printTaskDataDependencies()
 
    		case JobFailed(exception: Exception) =>
@@ -1682,6 +1685,8 @@ private[spark] object DAGScheduler {
 }
 
 import scala.collection.mutable.TreeSet // used to hold sorted Id's
+import scala.collection.mutable.Stack // used for dfs
+import scala.collection.mutable.ListBuffer
 
 // each Node holds it's parents instead of children because it was easier/ faster to implement that way
 // if each node were to hold its child then on would access the taskNodes hashmap each time a new node is made
@@ -1699,6 +1704,9 @@ class TaskNode(
 	var childTaskIds: TreeSet[Long] = new TreeSet[Long]()
 	def addChild(childTaskId: Long) {
 		childTaskIds += childTaskId
+	}
+	def removeChild(childTaskId: Long) {
+		childTaskIds -= childTaskId
 	}
 
 	def getOutputForPartition(index: Int): Long = outputForPartition(index)
@@ -1718,7 +1726,7 @@ class TaskNode(
 }
 
 class RootTaskNode() 
-extends TaskNode(-Long.MaxValue, -1, -1, -1, Array.fill[Long](1)(Long.MaxValue))
+extends TaskNode(-Long.MaxValue, -1, -1, -1, Array.fill[Long](1)(0))
 {
 	override def getOutputForPartition(index: Int): Long = outputForPartition(0)
 	override def toString(): String = { 
@@ -1743,9 +1751,9 @@ class TaskGraph() {
   // add endpoint nodes
   val ROOT_NODE_ID = -Long.MaxValue
   val END_NODE_ID = Long.MaxValue
-  val MAX_WEIGHT = Long.MaxValue
+  // val MAX_WEIGHT = Long.MaxValue
 
-  // taskNodes += ROOT_NODE_ID -> new TaskNode(ROOT_NODE_ID, -1, -1, -1, new Array[Long](0))// start node
+  // Root and End nodes are used for min k cut 
   taskNodes += ROOT_NODE_ID -> new RootTaskNode() // start node
   taskNodes += END_NODE_ID -> new TaskNode(END_NODE_ID, -1, -1, 0, new Array[Long](0)) // end node
 
@@ -1815,7 +1823,7 @@ class TaskGraph() {
   					stage.id,
   					stage.firstJobId,
   					i,
-  					Array.fill[Long](1)(MAX_WEIGHT) // TODO: locate where these result tasks are actually writing
+  					Array.fill[Long](1)(0) // TODO: locate where these result tasks are actually writing
 				)
 				newTaskNode.addChild(END_NODE_ID) // since result task have it's child be the END node
   				taskNodes += newTasks(i) -> newTaskNode
@@ -1847,24 +1855,28 @@ class TaskGraph() {
   }
 
   // loging tool to show how much memory is moved between tasks
-  def getMemFromParentToChild(parent: Long, child: Long): String = {
+  def getMemFromParentToChildString(parent: Long, child: Long): String = {
   	return "data sent from task " + parent + " to task " + child + " is " + taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
+  }
+  def getMemFromParentToChild(parent: Long, child: Long): Long = {
+  	return taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
   def printTaskDataDependencies() = {
   	val rooTaskNode: TaskNode = taskNodes.get(ROOT_NODE_ID).get
   	for (childTaskId <- rooTaskNode.childTaskIds)
-  	  println(getMemFromParentToChild(ROOT_NODE_ID, childTaskId))
+  	  println(getMemFromParentToChildString(ROOT_NODE_ID, childTaskId))
   	for (parentTaskId <- 0 to (taskNodes.size-3)) { // -3 because of the dummy first and last tasks
   	  val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
   		for (childTaskId <- parentTaskNode.childTaskIds)
-  		  println(getMemFromParentToChild(parentTaskId, childTaskId))
+  		  println(getMemFromParentToChildString(parentTaskId, childTaskId))
   	}
   }
 
   // prints so of the graph info and calls the toString of each node
   override def toString(): String = {
   	// printStageTaskGroupings()
+  	// dfs(ROOT_NODE_ID, END_NODE_ID)
 
   	var toReturn: String = ""
   	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + (taskNodes.size-3).toString + " tasks\n"
@@ -1883,5 +1895,87 @@ class TaskGraph() {
     	println()
     }
   }
+
+  // prints every path from source to sink
+  def dfs(sourceId: Long, sinkId: Long): Boolean = {
+  	println("DFS from " + sourceId + " to " + sinkId)
+  	var toReturn: Boolean = false
+    val stack: Stack[(Long, Boolean)] = new Stack[(Long, Boolean)]()
+    val path: Stack[Long] = new Stack[Long]()
+
+    stack.push((sourceId, false))
+
+    while (!stack.isEmpty) {
+    	val head = stack.pop
+    	if (head._2 == true) {// if visited already
+    		if (head._1 == sinkId) {
+    			toReturn = true
+	    		println("\tpath found: " + path.reverse.toString)
+	    	}
+    		path.pop
+    	}
+    	else {
+    		stack.push((head._1, true))
+	    	path.push(head._1)
+	    	val taskNode: TaskNode = taskNodes.get( head._1 ).get
+	    	for (childTaskId <- taskNode.childTaskIds) {
+	    		stack.push((childTaskId, false))
+	    	}
+    	}
+    }
+    if (!toReturn)
+    	println("\tNo path found")
+    toReturn
+  }
+  def dfs(): Boolean = dfs(ROOT_NODE_ID, END_NODE_ID)
+
+  def removeEdge(parentTaskId: Long, childTaskId: Long) {
+  	taskNodes.get(parentTaskId).get.removeChild(childTaskId)
+  }
+
+  def keepCutting() {
+  	var split: Boolean = true
+
+  	var min_edge = (ROOT_NODE_ID, END_NODE_ID, Long.MaxValue)
+  	forTaskNodeAddChild(ROOT_NODE_ID, END_NODE_ID) // so it can be removed at the start of the do loop
+  	do {
+  	  split = true
+	  removeEdge(min_edge._1, min_edge._2)
+	  println("removed edge " + min_edge._1 + " -> " + min_edge._2)
+
+	  min_edge = (ROOT_NODE_ID, END_NODE_ID, Long.MaxValue)
+
+	  val stack: Stack[(Long, Boolean)] = new Stack[(Long, Boolean)]()
+	  val path: Stack[Long] = new Stack[Long]()
+
+	  stack.push((ROOT_NODE_ID, false))
+
+	  while (!stack.isEmpty) {
+	    val head = stack.pop
+	    val taskId: Long = head._1
+	    if (head._2 == true) {// if visited already
+	      if (taskId == END_NODE_ID) {
+	    	split = false
+		    // println("path found: " + path.reverse.toString)
+		  }
+	      path.pop
+	    }
+	    else {
+	      stack.push((taskId, true))
+		  path.push(taskId)
+		  val taskNode: TaskNode = taskNodes.get( taskId ).get
+		  for (childTaskId <- taskNode.childTaskIds) {
+		    stack.push((childTaskId, false))
+		    val edge_mem: Long = getMemFromParentToChild(taskId, childTaskId)
+		  	if (min_edge._3 > edge_mem)
+		      min_edge = (taskId, childTaskId, edge_mem)
+		  }
+	    }
+	  }
+
+  	} while(!split)
+
+  }
+
 
 }
