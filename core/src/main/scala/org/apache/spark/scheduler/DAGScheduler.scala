@@ -1691,10 +1691,7 @@ class TaskNode(
 	val stageId: Int,
 	val firstJobId: Int,
 	val partitionId: Int,
-    // val partitionCount: Int,
     val outputForPartition: Array[Long]
-    // val parentStagesIds: Array[Int],
-    // val parentTasksIds: Array[Long]
     ) 
 {
 
@@ -1704,15 +1701,29 @@ class TaskNode(
 		childTaskIds += childTaskId
 	}
 
+	def getOutputForPartition(index: Int): Long = outputForPartition(index)
+	def getOutputForPartitionSize(): Int = outputForPartition.length
+
+
 	override def toString(): String = {
 		var toReturn: String = ""
 		toReturn += "Task(" + taskId + ") has child tasks( " + childTaskIds.mkString(" ") + " ) and outputs "
-		for (i <- 0 to (outputForPartition.length-1)) {
-			toReturn += outputForPartition(i) + " to par " + i 
-			if (i < (outputForPartition.length-1))
+		for (i <- 0 to (getOutputForPartitionSize()-1)) {
+			toReturn += getOutputForPartition(i) + " to par " + i 
+			if (i < (getOutputForPartitionSize()-1))
 			toReturn += ", "
 		}
 		toReturn
+	}
+}
+
+class RootTaskNode() 
+extends TaskNode(-Long.MaxValue, -1, -1, -1, Array.fill[Long](1)(Long.MaxValue))
+{
+	override def getOutputForPartition(index: Int): Long = outputForPartition(0)
+	override def toString(): String = { 
+		"Task(" + taskId + ") has child tasks( " + childTaskIds.mkString(" ") +
+		" ) and outputs " + getOutputForPartition(0) + " to every child"
 	}
 }
 
@@ -1729,6 +1740,15 @@ class TaskGraph() {
   // same shuffleId, we can then refrence the first stage to complete the shuffle
   val shuffleIdToStageId: HashMap[Int, Int] = new HashMap[Int, Int]()
   
+  // add endpoint nodes
+  val ROOT_NODE_ID = -Long.MaxValue
+  val END_NODE_ID = Long.MaxValue
+  val MAX_WEIGHT = Long.MaxValue
+
+  // taskNodes += ROOT_NODE_ID -> new TaskNode(ROOT_NODE_ID, -1, -1, -1, new Array[Long](0))// start node
+  taskNodes += ROOT_NODE_ID -> new RootTaskNode() // start node
+  taskNodes += END_NODE_ID -> new TaskNode(END_NODE_ID, -1, -1, 0, new Array[Long](0)) // end node
+
 
   // populates stageIdToTasks HashMap, called at task completetion
   def addTaskToHash(taskId: Long, stageId: Int) {  
@@ -1783,36 +1803,36 @@ class TaskGraph() {
   					stage.id,
   					stage.firstJobId,
   					i, // based on the fact that the lower taskId has the lower partition
-				// stage.numTasks,
-				outputsForPartitions(i) // based on the fact that the lower taskId has the lower partition
-				// parentStagesIds,
-				// parentTasksIds.toArray
+					outputsForPartitions(i) // based on the fact that the lower taskId has the lower partition
 				)
   			}
 
   			// MAYBE add this node as achild to the start node if this node has no parents
 
   			case rt: ResultStage => {
-  				taskNodes += newTasks(i) -> new TaskNode(
+  				val newTaskNode: TaskNode = new TaskNode(
   					newTasks(i),
   					stage.id,
   					stage.firstJobId,
   					i,
-				// stage.numTasks,
-				new Array[Long](0) // TODO: locate where these result tasks are actually writing
-				// parentStagesIds,
-				// parentTasksIds.toArray
+  					Array.fill[Long](1)(MAX_WEIGHT) // TODO: locate where these result tasks are actually writing
 				)
-
+				newTaskNode.addChild(END_NODE_ID) // since result task have it's child be the END node
+  				taskNodes += newTasks(i) -> newTaskNode
 			// MAYBE set this node's childre to be the end node
 
   			}
   		}
-  		for (parentTasksId <- parentTasksIds) {
+  		if (parentStagesIds.length == 0) { // if task has no parents set its parent to root node
+  		  forTaskNodeAddChild(ROOT_NODE_ID, newTasks(i))
+  		}
+  		else {
+  		  for (parentTasksId <- parentTasksIds) {
   			forTaskNodeAddChild(parentTasksId, newTasks(i))
   		}
   	// println(stage.id + ": " + "added task " + newTasks(i) + " part " + i)
-  	}
+  	  }
+    }
   }
 
   def forTaskNodeAddChild(parentTaskNodeId: Long, childTaskNodeId: Long) {
@@ -1828,30 +1848,17 @@ class TaskGraph() {
 
   // loging tool to show how much memory is moved between tasks
   def getMemFromParentToChild(parent: Long, child: Long): String = {
-  	// if (!taskNodes.contains(child) || !taskNodes.contains(parent))
-  	// 	return "one or more tasks are invalid"
-  	// else if (parent > child)
-  	// 	return "child task cannot come before parent"
-  	// else if (taskNodes.get(child).get.parentTasksIds.contains(parent)) {
-  	// 	val childTaskNode: TaskNode = taskNodes.get(child).get
-  	// 	val parentTaskNode: TaskNode = taskNodes.get(parent).get
-  	// 	  	// print("\tstageId: " + childTaskNode.stageId + " child task: " + childTaskNode.taskId + " partitionId: " + childTaskNode.partitionId + " parent task: " + 
-			// 		// parentTaskNode.taskId + " num out part: " + parentTaskNode.outputForPartition.length)
-  	// 		return "data sent from task " + parent + " to task " + child + " is " +
-  	// 			parentTaskNode.outputForPartition(childTaskNode.partitionId) + " bytes"
-  	// }
-  	// else
-  	// 	return "this child task is not dependent on this parent task"
-
-  	return "data sent from task " + parent + " to task " + child + " is " + taskNodes.get(parent).get.outputForPartition( taskNodes.get(child).get.partitionId )
+  	return "data sent from task " + parent + " to task " + child + " is " + taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
   def printTaskDataDependencies() = {
-  	for (parentTaskId <- 0 to (taskNodes.size-1)) {
-  		val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
-  		for (childTaskId <- parentTaskNode.childTaskIds) {
-  			println(getMemFromParentToChild(parentTaskId, childTaskId))
-  		}
+  	val rooTaskNode: TaskNode = taskNodes.get(ROOT_NODE_ID).get
+  	for (childTaskId <- rooTaskNode.childTaskIds)
+  	  println(getMemFromParentToChild(ROOT_NODE_ID, childTaskId))
+  	for (parentTaskId <- 0 to (taskNodes.size-3)) { // -3 because of the dummy first and last tasks
+  	  val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+  		for (childTaskId <- parentTaskNode.childTaskIds)
+  		  println(getMemFromParentToChild(parentTaskId, childTaskId))
   	}
   }
 
@@ -1860,9 +1867,11 @@ class TaskGraph() {
   	// printStageTaskGroupings()
 
   	var toReturn: String = ""
-  	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + taskNodes.size + " tasks\n"
-  	for (i <- 0 to (taskNodes.size-1))
-  	toReturn += "\t" + taskNodes(i).toString + "\n"
+  	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + (taskNodes.size-3).toString + " tasks\n"
+  	toReturn += "\t" + taskNodes(ROOT_NODE_ID).toString + "\n"
+  	for (i <- 0 to (taskNodes.size-3)) // -3 because of the dummy first and last tasks
+  	  toReturn += "\t" + taskNodes(i).toString + "\n"
+  	toReturn += "\t" + taskNodes(END_NODE_ID).toString + "\n"
   	toReturn
   }
 
