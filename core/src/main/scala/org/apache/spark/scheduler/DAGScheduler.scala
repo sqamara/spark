@@ -625,9 +625,9 @@ job.finalStage match {
    		// taskGraph.keepCutting()
    		// taskGraph.dfs()
    		taskGraph.printTaskDataDependencies()
-   		val cuts: ListBuffer[(Long,Long,Long)] = taskGraph.getMinCutOfNode(-Long.MaxValue)
+   		val cuts: RecusiveStructure = taskGraph.getMinCutOfNode(-Long.MaxValue)
    		println()
-   		for (cut <- cuts)
+   		for (cut <- cuts.childCutList)
    			println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
    		println()
 
@@ -1993,33 +1993,43 @@ class TaskGraph() {
   	} while(!split)
 
   }
-  // start with a node and Long.MaxValue
-  def getMinCutOfNode(parentTaskId: Long): ListBuffer[(Long,Long,Long)] = {
+
+  def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
+  	
   	val parentTask: TaskNode = taskNodes.get(parentTaskId).get
-
-  	val toReturn: ListBuffer[(Long,Long,Long)] = new ListBuffer[(Long,Long,Long)]()
+  	val toReturn: RecusiveStructure = new RecusiveStructure()
+  	
   	for (childTaskId <- parentTask.childTaskIds) {
-	  	val minEdgeCutSize: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
-  		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
-  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
-  		val childCutList: ListBuffer[(Long,Long,Long)] = getMinCutOfNode(childTaskId)
-  		var childListEdgeSum: Double = 0
+		val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)
+		var childEdgeListSum: Double = 0
+  		childRS.childCutList.foreach(childEdgeListSum += _._3)
 
-  		childCutList.foreach(childListEdgeSum += _._3)
+	  	val allMemIntoChild: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
+  		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
+  		val memIntoChildFromOtherParents = allMemIntoChild - memFromParentToChild
+  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
+
+
   		if ( childTaskId != END_NODE_ID &&
-  			 minEdgeCutSize > childListEdgeSum) {// put prefrence on cutting lower in the graph
-	  		println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + minEdgeCutSize + " vs " + childListEdgeSum + ")")
-  			toReturn ++= childCutList
+  			allMemIntoChild + childRS.otherInputs > childEdgeListSum) {// put prefrence on cutting lower in the graph
+	  		println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + allMemIntoChild + " vs " + childEdgeListSum + ")")
+  			toReturn.childCutList ++= childRS.childCutList
+  			toReturn.otherInputs += memIntoChildFromOtherParents
+
   		}
   		else {
-  			println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue minEdgeCutSize (" + minEdgeCutSize + ") < childListEdgeSum " + childListEdgeSum)
-  			if (childListEdgeSum == 351.0)
-  				println(childCutList)
-  			toReturn += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
+  			println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue allMemIntoChild (" + allMemIntoChild + ") < childEdgeListSum " + childEdgeListSum)
+  			if (childEdgeListSum == 351.0)
+  				println(childRS.childCutList)
+  			toReturn.childCutList += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
+  			// toReturn.otherInputs += memIntoChildFromOtherParents
   		}
   	}
 	return toReturn
-  }
+  } 
+}
 
-
+class RecusiveStructure() {
+	val childCutList: TreeSet[(Long,Long,Long)] = new TreeSet[(Long,Long,Long)]()
+	var otherInputs: Long = 0
 }
