@@ -41,6 +41,7 @@
  import org.apache.spark.util._
  import org.apache.spark.storage.BlockManagerMessages.BlockManagerHeartbeat
 
+import scala.collection.mutable.ListBuffer
 /**
  * The high-level scheduling layer that implements stage-oriented scheduling. It computes a DAG of
  * stages for each job, keeps track of which RDDs and stage outputs are materialized, and finds a
@@ -621,9 +622,14 @@ job.finalStage match {
 
    		println(taskGraph.toString())
    		taskGraph.dfs()
-   		taskGraph.keepCutting()
-   		taskGraph.dfs()
+   		// taskGraph.keepCutting()
+   		// taskGraph.dfs()
    		taskGraph.printTaskDataDependencies()
+   		val cuts: ListBuffer[(Long,Long,Long)] = taskGraph.getMinCutOfNode(-Long.MaxValue)
+   		println()
+   		for (cut <- cuts)
+   			println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
+   		println()
 
    		case JobFailed(exception: Exception) =>
    		logInfo("Job %d failed: %s, took %f s".format
@@ -1204,7 +1210,6 @@ private[scheduler] def handleJobSubmitted(jobId: Int,
           		markStageAsFinished(shuffleStage)
 
           		taskGraph.addStage(shuffleStage, getParentStages(shuffleStage.rdd, shuffleStage.firstJobId))
-
           		logInfo("looking for newly runnable stages")
           		logInfo("running: " + runningStages)
           		logInfo("waiting: " + waitingStages)
@@ -1686,7 +1691,7 @@ private[spark] object DAGScheduler {
 
 import scala.collection.mutable.TreeSet // used to hold sorted Id's
 import scala.collection.mutable.Stack // used for dfs
-import scala.collection.mutable.ListBuffer
+// import scala.collection.mutable.ListBuffer
 
 // each Node holds it's parents instead of children because it was easier/ faster to implement that way
 // if each node were to hold its child then on would access the taskNodes hashmap each time a new node is made
@@ -1699,7 +1704,7 @@ class TaskNode(
     val outputForPartition: Array[Long]
     ) 
 {
-
+	var sumOfBytesIn: Long = 0
 	// initialize an empty child task set which will be populated as more stages complete
 	var childTaskIds: TreeSet[Long] = new TreeSet[Long]()
 	def addChild(childTaskId: Long) {
@@ -1728,6 +1733,7 @@ class TaskNode(
 class RootTaskNode() 
 extends TaskNode(-Long.MaxValue, -1, -1, -1, Array.fill[Long](1)(0))
 {
+	sumOfBytesIn = Long.MaxValue
 	override def getOutputForPartition(index: Int): Long = outputForPartition(0)
 	override def toString(): String = { 
 		"Task(" + taskId + ") has child tasks( " + childTaskIds.mkString(" ") +
@@ -1823,7 +1829,7 @@ class TaskGraph() {
   					stage.id,
   					stage.firstJobId,
   					i,
-  					Array.fill[Long](1)(0) // TODO: locate where these result tasks are actually writing
+  					Array.fill[Long](1)(Long.MaxValue) // TODO: locate where these result tasks are actually writing
 				)
 				newTaskNode.addChild(END_NODE_ID) // since result task have it's child be the END node
   				taskNodes += newTasks(i) -> newTaskNode
@@ -1844,7 +1850,16 @@ class TaskGraph() {
   }
 
   def forTaskNodeAddChild(parentTaskNodeId: Long, childTaskNodeId: Long) {
-  	taskNodes.get(parentTaskNodeId).get.addChild(childTaskNodeId)
+  	val parentTaskNode: TaskNode = taskNodes.get(parentTaskNodeId).get
+  	parentTaskNode.addChild(childTaskNodeId)
+  	val childtaskNode: TaskNode = taskNodes.get(childTaskNodeId).get
+  	if (parentTaskNodeId == ROOT_NODE_ID)
+  		childtaskNode.sumOfBytesIn = childtaskNode.outputForPartition.sum
+  	// else if (childTaskNodeId == END_NODE_ID)
+  	// 	childtaskNode.sumOfBytesIn = Long.MaxValue
+  	else 
+  		childtaskNode.sumOfBytesIn += parentTaskNode.outputForPartition(childtaskNode.partitionId)
+
   }
 
   // called iff there was a stage already processed with the same shuffle dependency
@@ -1856,9 +1871,11 @@ class TaskGraph() {
 
   // loging tool to show how much memory is moved between tasks
   def getMemFromParentToChildString(parent: Long, child: Long): String = {
-  	return "data sent from task " + parent + " to task " + child + " is " + taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
+	return "data sent from task " + parent + " to task " + child + " is " + getMemFromParentToChild(parent, child)
   }
   def getMemFromParentToChild(parent: Long, child: Long): Long = {
+  	if (parent == ROOT_NODE_ID)
+  		return taskNodes.get(child).get.outputForPartition.sum
   	return taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
@@ -1975,6 +1992,33 @@ class TaskGraph() {
 
   	} while(!split)
 
+  }
+  // start with a node and Long.MaxValue
+  def getMinCutOfNode(parentTaskId: Long): ListBuffer[(Long,Long,Long)] = {
+  	val parentTask: TaskNode = taskNodes.get(parentTaskId).get
+
+  	val toReturn: ListBuffer[(Long,Long,Long)] = new ListBuffer[(Long,Long,Long)]()
+  	for (childTaskId <- parentTask.childTaskIds) {
+	  	val minEdgeCutSize: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
+  		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
+  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
+  		val childCutList: ListBuffer[(Long,Long,Long)] = getMinCutOfNode(childTaskId)
+  		var childListEdgeSum: Double = 0
+
+  		childCutList.foreach(childListEdgeSum += _._3)
+  		if ( childTaskId != END_NODE_ID &&
+  			 minEdgeCutSize > childListEdgeSum) {// put prefrence on cutting lower in the graph
+	  		println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + minEdgeCutSize + " vs " + childListEdgeSum + ")")
+  			toReturn ++= childCutList
+  		}
+  		else {
+  			println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue minEdgeCutSize (" + minEdgeCutSize + ") < childListEdgeSum " + childListEdgeSum)
+  			if (childListEdgeSum == 351.0)
+  				println(childCutList)
+  			toReturn += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
+  		}
+  	}
+	return toReturn
   }
 
 
