@@ -622,14 +622,8 @@ job.finalStage match {
 
    		println(taskGraph.toString())
    		taskGraph.dfs()
-   		// taskGraph.keepCutting()
-   		// taskGraph.dfs()
    		taskGraph.printTaskDataDependencies()
-   		val cuts: RecusiveStructure = taskGraph.getMinCutOfNode(-Long.MaxValue)
-   		println()
-   		for (cut <- cuts.childCutList)
-   			println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
-   		println()
+   		taskGraph.minSplit()
 
    		case JobFailed(exception: Exception) =>
    		logInfo("Job %d failed: %s, took %f s".format
@@ -1707,6 +1701,8 @@ class TaskNode(
 	var sumOfBytesIn: Long = 0
 	// initialize an empty child task set which will be populated as more stages complete
 	var childTaskIds: TreeSet[Long] = new TreeSet[Long]()
+
+	var status: Int = 0 // 0 not visited, 1 kept, 2 cut
 	def addChild(childTaskId: Long) {
 		childTaskIds += childTaskId
 	}
@@ -1950,48 +1946,17 @@ class TaskGraph() {
   	taskNodes.get(parentTaskId).get.removeChild(childTaskId)
   }
 
-  def keepCutting() {
-  	var split: Boolean = true
-
-  	var min_edge = (ROOT_NODE_ID, END_NODE_ID, Long.MaxValue)
-  	forTaskNodeAddChild(ROOT_NODE_ID, END_NODE_ID) // so it can be removed at the start of the do loop
-  	do {
-  	  split = true
-	  removeEdge(min_edge._1, min_edge._2)
-	  println("removed edge " + min_edge._1 + " -> " + min_edge._2)
-
-	  min_edge = (ROOT_NODE_ID, END_NODE_ID, Long.MaxValue)
-
-	  val stack: Stack[(Long, Boolean)] = new Stack[(Long, Boolean)]()
-	  val path: Stack[Long] = new Stack[Long]()
-
-	  stack.push((ROOT_NODE_ID, false))
-
-	  while (!stack.isEmpty) {
-	    val head = stack.pop
-	    val taskId: Long = head._1
-	    if (head._2 == true) {// if visited already
-	      if (taskId == END_NODE_ID) {
-	    	split = false
-		    // println("path found: " + path.reverse.toString)
-		  }
-	      path.pop
-	    }
-	    else {
-	      stack.push((taskId, true))
-		  path.push(taskId)
-		  val taskNode: TaskNode = taskNodes.get( taskId ).get
-		  for (childTaskId <- taskNode.childTaskIds) {
-		    stack.push((childTaskId, false))
-		    val edge_mem: Long = getMemFromParentToChild(taskId, childTaskId)
-		  	if (min_edge._3 > edge_mem)
-		      min_edge = (taskId, childTaskId, edge_mem)
-		  }
-	    }
-	  }
-
-  	} while(!split)
-
+  def minSplit() {
+  	for ((key,taskNode) <- taskNodes)
+  		taskNode.status = 0
+	val cuts: RecusiveStructure = this.getMinCutOfNode(-Long.MaxValue)
+	println()
+	if (cuts.childCutList.isEmpty) {
+		println("SOMTHING WRONG")
+	}
+	for (cut <- cuts.childCutList)
+		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
+	println()
   }
 
   def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
@@ -2000,31 +1965,40 @@ class TaskGraph() {
   	val toReturn: RecusiveStructure = new RecusiveStructure()
   	
   	for (childTaskId <- parentTask.childTaskIds) {
-		val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)
-		var childEdgeListSum: Double = 0
-  		childRS.childCutList.foreach(childEdgeListSum += _._3)
-
-	  	val allMemIntoChild: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
+  		val childtaskNode: TaskNode = taskNodes.get(childTaskId).get
   		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
-  		val memIntoChildFromOtherParents = allMemIntoChild - memFromParentToChild
-  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
 
-
-  		if ( childTaskId != END_NODE_ID &&
-  			allMemIntoChild + childRS.otherInputs > childEdgeListSum) {// put prefrence on cutting lower in the graph
-	  		println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + allMemIntoChild + " vs " + childEdgeListSum + ")")
-  			toReturn.childCutList ++= childRS.childCutList
-  			toReturn.otherInputs += memIntoChildFromOtherParents
-
-  		}
-  		else {
-  			println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue allMemIntoChild (" + allMemIntoChild + ") < childEdgeListSum " + childEdgeListSum)
-  			if (childEdgeListSum == 351.0)
-  				println(childRS.childCutList)
+  		// handle if the node has been visited
+  		if (childtaskNode.status == 2) { // edge in was cut before cut this edge 
   			toReturn.childCutList += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
-  			// toReturn.otherInputs += memIntoChildFromOtherParents
   		}
-  	}
+  		else if (childtaskNode.status == 1) { // edge in was kept before keep this edge 
+  			// do nothing, do not recurse, do not cut
+  		}
+  		else if (childtaskNode.status == 0) { // first visit to node perform recusion
+			val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)
+			var childEdgeListSum: Double = 0
+	  		childRS.childCutList.foreach(childEdgeListSum += _._3)
+
+		  	val allMemIntoChild: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
+	  		val memIntoChildFromOtherParents = allMemIntoChild - memFromParentToChild
+	  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
+
+
+	  		if ( childTaskId != END_NODE_ID &&
+	  			allMemIntoChild + childRS.otherInputs > childEdgeListSum) {// put prefrence on cutting lower in the graph
+		  		// println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + allMemIntoChild + " vs " + childEdgeListSum + ")")
+  				toReturn.childCutList ++= childRS.childCutList
+  				toReturn.otherInputs += memIntoChildFromOtherParents
+  				childtaskNode.status == 1
+	  		}
+	  		else {
+	  			// println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue allMemIntoChild (" + allMemIntoChild + ") < childEdgeListSum " + childEdgeListSum)
+	  			toReturn.childCutList += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
+	  			childtaskNode.status = 2
+	  		}
+	  	}
+	  }
 	return toReturn
   } 
 }
