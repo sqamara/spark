@@ -249,6 +249,7 @@ private[spark] class TaskSchedulerImpl(
       val host = shuffledOffers(i).host
       if (availableCpus(i) >= CPUS_PER_TASK) {
         try {
+          // println("\noffering execId: " + execId + " on host: " + host + " with availableCpus: " + availableCpus(i) + "\n")
           for (task <- taskSet.resourceOffer(execId, host, maxLocality)) {
             tasks(i) += task
             val tid = task.taskId
@@ -259,6 +260,7 @@ private[spark] class TaskSchedulerImpl(
             availableCpus(i) -= CPUS_PER_TASK
             assert(availableCpus(i) >= 0)
             launchedTask = true
+            logInfo("Task " + task.taskId + " from stage " + taskSet.stageId + " goes to exec "  + execId)
           }
         } catch {
           case e: TaskNotSerializableException =>

@@ -369,11 +369,13 @@ private[spark] class TaskSetManager(
     : Option[(Int, TaskLocality.Value, Boolean)] =
   {
     for (index <- dequeueTaskFromList(execId, getPendingTasksForExecutor(execId))) {
+      logError("dequeued task from PROCESS_LOCAL pending")
       return Some((index, TaskLocality.PROCESS_LOCAL, false))
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NODE_LOCAL)) {
       for (index <- dequeueTaskFromList(execId, getPendingTasksForHost(host))) {
+        logError("dequeued task from NODE_LOCAL pending")
         return Some((index, TaskLocality.NODE_LOCAL, false))
       }
     }
@@ -381,6 +383,7 @@ private[spark] class TaskSetManager(
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.NO_PREF)) {
       // Look for noPref tasks after NODE_LOCAL for minimize cross-rack traffic
       for (index <- dequeueTaskFromList(execId, pendingTasksWithNoPrefs)) {
+        logError("dequeued task from NO_PREF pending")
         return Some((index, TaskLocality.PROCESS_LOCAL, false))
       }
     }
@@ -390,12 +393,14 @@ private[spark] class TaskSetManager(
         rack <- sched.getRackForHost(host)
         index <- dequeueTaskFromList(execId, getPendingTasksForRack(rack))
       } {
+        logError("dequeued task from RACK_LOCAL pending")
         return Some((index, TaskLocality.RACK_LOCAL, false))
       }
     }
 
     if (TaskLocality.isAllowed(maxLocality, TaskLocality.ANY)) {
       for (index <- dequeueTaskFromList(execId, allPendingTasks)) {
+        logError("dequeued task from ANY pending")
         return Some((index, TaskLocality.ANY, false))
       }
     }
