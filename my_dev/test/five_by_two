@@ -1,0 +1,7 @@
+val array = 0 to 99 toArray
+val rdd0 = ( sc.parallelize(array, 2).map(v => (v%11, 1))
+.reduceByKey(_+_).map(v => (v._1%7, v._2))
+.reduceByKey(_+_).map(v => (v._1%5, v._2))
+.reduceByKey(_+_).map(v => (v._1%3, v._2))
+.reduceByKey(_+_) )
+rdd0.collect()

@@ -622,8 +622,8 @@ class DAGScheduler(
         println(taskGraph.toString())
       	taskGraph.dfs()
       	taskGraph.printTaskDataDependencies()
-      	taskGraph.minSplit()
-
+      	// taskGraph.minSplit()
+		taskGraph.min_k_cut(2)
       case JobFailed(exception: Exception) =>
         logInfo("Job %d failed: %s, took %f s".format
           (waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
