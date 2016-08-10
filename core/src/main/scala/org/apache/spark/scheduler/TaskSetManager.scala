@@ -204,6 +204,8 @@ private[spark] class TaskSetManager(
         }
         case _ => Unit
       }
+      // YOU COULD ADD THE TASKS TO SPECIFIC HOSTS HERE AND RELY ON THE NORMAL SCHECULING
+
       pendingTasksForHost.getOrElseUpdate(loc.host, new ArrayBuffer) += index
       for (rack <- sched.getRackForHost(loc.host)) {
         pendingTasksForRack.getOrElseUpdate(rack, new ArrayBuffer) += index
@@ -252,7 +254,10 @@ private[spark] class TaskSetManager(
     while (indexOffset > 0) {
       indexOffset -= 1
       val index = list(indexOffset)
-      if (!executorIsBlacklisted(execId, index)) {
+      if (!executorIsBlacklisted(execId, index) &&
+          sched.dagScheduler.taskGraph.taskIsForThisDC(execId, index /*TODO REPLACE THIS WITH TASKID*/) ) {
+          sched.dagScheduler.taskGraph.taskToExecutor += tasks(index) -> execId
+
         // This should almost always be list.trimEnd(1) to remove tail
         list.remove(indexOffset)
         if (copiesRunning(index) == 0 && !successful(index)) {

@@ -3,7 +3,7 @@ package org.apache.spark.scheduler
 import scala.collection.mutable.TreeSet // used to hold sorted Id's
 import scala.collection.mutable.Stack // used for dfs
 import scala.collection.mutable.HashMap 
-// import scala.collection.mutable.ListBuffer
+import scala.collection.mutable.ListBuffer
 
 // each Node holds it's parents instead of children because it was easier/ faster to implement that way
 // if each node were to hold its child then on would access the taskNodes hashmap each time a new node is made
@@ -19,7 +19,8 @@ class TaskNode(
 	var sumOfBytesIn: Long = 0
 	// initialize an empty child task set which will be populated as more stages complete
 	var childTaskIds: TreeSet[Long] = new TreeSet[Long]()
-
+	// a string to indicate the executor
+	var executorId: String = "NOT SET"
 	var status: Int = 0 // 0 not visited, 1 kept, 2 cut
 	def addChild(childTaskId: Long) {
 		childTaskIds += childTaskId
@@ -34,7 +35,7 @@ class TaskNode(
 
 	override def toString(): String = {
 		var toReturn: String = ""
-		toReturn += "Task(" + taskId + ") has child tasks( " + childTaskIds.mkString(" ") + " ) and outputs "
+		toReturn += "Task(" + taskId + "), on executor: " + executorId + ", has child tasks( " + childTaskIds.mkString(" ") + " ) and outputs "
 		for (i <- 0 to (getOutputForPartitionSize()-1)) {
 			toReturn += getOutputForPartition(i) + " to par " + i 
 			if (i < (getOutputForPartitionSize()-1))
@@ -61,7 +62,10 @@ class TaskGraph() {
   val stageIdToTasks: HashMap[Int, TreeSet[Long]] = new HashMap[Int, TreeSet[Long]]()
 
   // Task data hashed by taskId
-  val taskNodes: HashMap[Long, TaskNode] = new HashMap[Long, TaskNode]()
+  val taskNodes: HashMap[Long, TaskNode] = new HashMap[Long, TaskNode]()  // elements added as Stages complete
+  // executor used for each task
+  val taskToExecutor: HashMap[Task[_],String] = new HashMap[Task[_], String]() // elements added as task are sent to backend
+  // TODO: FIXTHIS ^^ should only need one hasmap holding node info
 
   // after each shuffle stage completion the stageId is hashed to the shuffleId
   // so that if another shuffle comes with the same dependency and therefore 
@@ -188,7 +192,9 @@ class TaskGraph() {
 	return "data sent from task " + parent + " to task " + child + " is " + getMemFromParentToChild(parent, child)
   }
   def getMemFromParentToChild(parent: Long, child: Long): Long = {
-  	if (parent == ROOT_NODE_ID)
+  	if (parent == child)
+  		return 0
+  	else if (parent == ROOT_NODE_ID)
   		return taskNodes.get(child).get.outputForPartition.sum
   	return taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
@@ -206,6 +212,11 @@ class TaskGraph() {
 
   // prints so of the graph info and calls the toString of each node
   override def toString(): String = {
+  	for ((task, executorId) <- taskToExecutor) {
+  		val taskId: Long = getTaskId(task)
+  		taskNodes.get(taskId).get.executorId = executorId
+  	}
+  	getMemTransferBetweenExecutors()
   	// printStageTaskGroupings()
   	// dfs(ROOT_NODE_ID, END_NODE_ID)
 
@@ -218,6 +229,7 @@ class TaskGraph() {
   	toReturn
   }
 
+  // prints stageId's and the tasks within each
   def printStageTaskGroupings() {
     for ((k,v) <- stageIdToTasks) {
     	print(k + " ")
@@ -258,11 +270,16 @@ class TaskGraph() {
     	println("\tNo path found")
     toReturn
   }
+
+  // performs a complete dfs from root to end
   def dfs(): Boolean = dfs(ROOT_NODE_ID, END_NODE_ID)
 
+
+  // removes edge from parent to child
   def removeEdge(parentTaskId: Long, childTaskId: Long) {
   	taskNodes.get(parentTaskId).get.removeChild(childTaskId)
   }
+
 
   def minSplit() {
   	for ((key,taskNode) <- taskNodes)
@@ -318,6 +335,51 @@ class TaskGraph() {
 	  	}
 	  }
 	return toReturn
+  }
+
+  // calculates the memory passed between executors
+  // does not include root to first generation tasks and result task to end task mem movement
+  // because we did not really define them 
+  def getMemTransferBetweenExecutors() {
+  	for ((k,v) <- taskNodes)
+  		v.status = 0 // indicated not visited
+  	var status: Int = 0 // 0 not visited, 1 kept, 2 cut
+	/* perform a dfs 
+	 * if the child node does not have the same executor then add the mem sent to cross bandwidth
+	 */
+    val stack: Stack[Long] = new Stack[Long]()
+    var memTransfer: Double = 0
+
+    stack.push(ROOT_NODE_ID)
+
+    while (!stack.isEmpty) {
+    	val parentTaskId: Long = stack.pop
+	    val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+	    parentTaskNode.status = 1 // indicate visited so that we do recuse multiple times down
+    	for (childTaskId <- parentTaskNode.childTaskIds) {
+    		if (childTaskId != END_NODE_ID) {
+    			val childTaskNode: TaskNode = taskNodes.get(childTaskId).get
+    			if (childTaskNode.status == 0)
+    				stack.push(childTaskId)
+    			if (parentTaskId != ROOT_NODE_ID && 
+    				childTaskNode.executorId != parentTaskNode.executorId) {
+    				println("\tadding " + parentTaskId + " to " + childTaskId)
+    				memTransfer += getMemFromParentToChild(parentTaskId, childTaskId)
+    			}
+	    	}
+	    }
+    }  	
+    println("memTransfer == " + memTransfer)
+  }
+
+  def getTaskId(task: Task[_]): Long = {
+  	val stageTasks: Array[Long] = stageIdToTasks.get(task.stageId).get.toArray
+  	return stageTasks(task.partitionId)
+  }
+
+  def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
+  	println("\tChecking if executor (" + execId + ") and task (" + taskId + ") align for DC")
+  	return true
   } 
 }
 

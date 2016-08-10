@@ -619,7 +619,7 @@ class DAGScheduler(
         logInfo("Job %d finished: %s, took %f s".format
           (waiter.jobId, callSite.shortForm, (System.nanoTime - start) / 1e9))
 
-       //  println(taskGraph.toString())
+        println(taskGraph.toString())
       	// taskGraph.dfs()
       	// taskGraph.printTaskDataDependencies()
       	// taskGraph.minSplit()
