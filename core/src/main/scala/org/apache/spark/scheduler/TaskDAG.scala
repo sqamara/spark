@@ -14,8 +14,8 @@ class TaskNode(
 	val stageId: Int,
 	val firstJobId: Int,
 	val partitionId: Int,
-    val outputForPartition: Array[Long]
-    ) 
+	val outputForPartition: Array[Long]
+	) 
 {
 	var sumOfBytesIn: Long = 0
 	// initialize an empty child task set which will be populated as more stages complete
@@ -137,7 +137,7 @@ class TaskGraph() {
   					stage.firstJobId,
   					i, // based on the fact that the lower taskId has the lower partition
 					outputsForPartitions(i) // based on the fact that the lower taskId has the lower partition
-				)
+					)
   			}
 
   			// MAYBE add this node as achild to the start node if this node has no parents
@@ -149,35 +149,35 @@ class TaskGraph() {
   					stage.firstJobId,
   					i,
   					Array.fill[Long](1)(Long.MaxValue) // TODO: locate where these result tasks are actually writing
-				)
+  					)
 				newTaskNode.addChild(END_NODE_ID) // since result task have it's child be the END node
-  				taskNodes += newTasks(i) -> newTaskNode
+				taskNodes += newTasks(i) -> newTaskNode
 			// MAYBE set this node's childre to be the end node
 
-  			}
-  		}
+		}
+	}
   		if (parentStagesIds.length == 0) { // if task has no parents set its parent to root node
-  		  forTaskNodeAddChild(ROOT_NODE_ID, newTasks(i))
+  			forTaskNodeAddChild(ROOT_NODE_ID, newTasks(i))
   		}
   		else {
-  		  for (parentTasksId <- parentTasksIds) {
-  			forTaskNodeAddChild(parentTasksId, newTasks(i))
-  		}
+  			for (parentTasksId <- parentTasksIds) {
+  				forTaskNodeAddChild(parentTasksId, newTasks(i))
+  			}
   	// println(stage.id + ": " + "added task " + newTasks(i) + " part " + i)
-  	  }
-    }
   }
+}
+}
 
-  def forTaskNodeAddChild(parentTaskNodeId: Long, childTaskNodeId: Long) {
-  	val parentTaskNode: TaskNode = taskNodes.get(parentTaskNodeId).get
-  	parentTaskNode.addChild(childTaskNodeId)
-  	val childtaskNode: TaskNode = taskNodes.get(childTaskNodeId).get
-  	if (parentTaskNodeId == ROOT_NODE_ID)
-  		childtaskNode.sumOfBytesIn = childtaskNode.outputForPartition.sum
+def forTaskNodeAddChild(parentTaskNodeId: Long, childTaskNodeId: Long) {
+	val parentTaskNode: TaskNode = taskNodes.get(parentTaskNodeId).get
+	parentTaskNode.addChild(childTaskNodeId)
+	val childtaskNode: TaskNode = taskNodes.get(childTaskNodeId).get
+	if (parentTaskNodeId == ROOT_NODE_ID)
+	childtaskNode.sumOfBytesIn = childtaskNode.outputForPartition.sum
   	// else if (childTaskNodeId == END_NODE_ID)
   	// 	childtaskNode.sumOfBytesIn = Long.MaxValue
   	else 
-  		childtaskNode.sumOfBytesIn += parentTaskNode.outputForPartition(childtaskNode.partitionId)
+  	childtaskNode.sumOfBytesIn += parentTaskNode.outputForPartition(childtaskNode.partitionId)
 
   }
 
@@ -190,26 +190,26 @@ class TaskGraph() {
 
   // loging tool to show how much memory is moved between tasks
   def getMemFromParentToChildString(parent: Long, child: Long): String = {
-	return "data sent from task " + parent + " to task " + child + " is " + getMemFromParentToChild(parent, child)
+  	return "data sent from task " + parent + " to task " + child + " is " + getMemFromParentToChild(parent, child)
   }
   def getMemFromParentToChild(parent: Long, child: Long): Long = {
   	if (parent == child)
-  		return 0
+  	return 0
   	else if (parent == ROOT_NODE_ID)
-  		return taskNodes.get(child).get.outputForPartition.sum
+  	return taskNodes.get(child).get.outputForPartition.sum
   	else if (child == END_NODE_ID)
-  		return Long.MaxValue
+  	return Long.MaxValue
   	return taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
   def printTaskDataDependencies() = {
   	val rooTaskNode: TaskNode = taskNodes.get(ROOT_NODE_ID).get
   	for (childTaskId <- rooTaskNode.childTaskIds)
-  	  println(getMemFromParentToChildString(ROOT_NODE_ID, childTaskId))
+  	println(getMemFromParentToChildString(ROOT_NODE_ID, childTaskId))
   	for (parentTaskId <- 0 to (taskNodes.size-3)) { // -3 because of the dummy first and last tasks
-  	  val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+  		val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
   		for (childTaskId <- parentTaskNode.childTaskIds)
-  		  println(getMemFromParentToChildString(parentTaskId, childTaskId))
+  		println(getMemFromParentToChildString(parentTaskId, childTaskId))
   	}
   }
 
@@ -226,53 +226,53 @@ class TaskGraph() {
   	var toReturn: String = ""
   	toReturn += "TaskGraph has " + stageIdToTasks.size + " stages and " + (taskNodes.size-3).toString + " tasks\n"
   	toReturn += "\t" + taskNodes(ROOT_NODE_ID).toString + "\n"
-  	for (i <- 0 to (taskNodes.size-3)) // -3 because of the dummy first and last tasks
-  	  toReturn += "\t" + taskNodes(i).toString + "\n"
+  	for (i <- 0 until (taskNodes.size-2)) // -2 because of the dummy first and last tasks
+  	toReturn += "\t" + taskNodes(i).toString + "\n"
   	toReturn += "\t" + taskNodes(END_NODE_ID).toString + "\n"
   	toReturn
   }
 
   // prints stageId's and the tasks within each
   def printStageTaskGroupings() {
-    for ((k,v) <- stageIdToTasks) {
-    	print(k + " ")
-    	for (t <- v)
-    	  print(t + " ")
-    	println()
-    }
+  	for ((k,v) <- stageIdToTasks) {
+  		print(k + " ")
+  		for (t <- v)
+  		print(t + " ")
+  		println()
+  	}
   }
 
   // prints every path from source to sink
   def dfs(sourceId: Long, sinkId: Long): Boolean = {
   	println("DFS from " + sourceId + " to " + sinkId)
   	var toReturn: Boolean = false
-    val stack: Stack[(Long, Boolean)] = new Stack[(Long, Boolean)]()
-    val path: Stack[Long] = new Stack[Long]()
+  	val stack: Stack[(Long, Boolean)] = new Stack[(Long, Boolean)]()
+  	val path: Stack[Long] = new Stack[Long]()
 
-    stack.push((sourceId, false))
+  	stack.push((sourceId, false))
 
-    while (!stack.isEmpty) {
-    	val head = stack.pop
+  	while (!stack.isEmpty) {
+  		val head = stack.pop
     	if (head._2 == true) {// if visited already
     		if (head._1 == sinkId) {
     			toReturn = true
-	    		println("\tpath found: " + path.reverse.toString)
-	    	}
+    			println("\tpath found: " + path.reverse.toString)
+    		}
     		path.pop
     	}
     	else {
     		stack.push((head._1, true))
-	    	path.push(head._1)
-	    	val taskNode: TaskNode = taskNodes.get( head._1 ).get
-	    	for (childTaskId <- taskNode.childTaskIds) {
-	    		stack.push((childTaskId, false))
-	    	}
+    		path.push(head._1)
+    		val taskNode: TaskNode = taskNodes.get( head._1 ).get
+    		for (childTaskId <- taskNode.childTaskIds) {
+    			stack.push((childTaskId, false))
+    		}
     	}
     }
     if (!toReturn)
-    	println("\tNo path found")
+    println("\tNo path found")
     toReturn
-  }
+}
 
   // performs a complete dfs from root to end
   def dfs(): Boolean = dfs(ROOT_NODE_ID, END_NODE_ID)
@@ -284,36 +284,37 @@ class TaskGraph() {
   }
 
 
-  def minSplit() {
-  	for ((key,taskNode) <- taskNodes)
-  		taskNode.status = 0
-	val cuts: RecusiveStructure = this.getMinCutOfNode(-Long.MaxValue)
-	println()
-	if (cuts.childCutList.isEmpty) {
-		println("SOMTHING WRONG")
-	}
-	for (cut <- cuts.childCutList)
-		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
-	println()
-	
-	// for (taskNode <- taskNodes)
-		// println(taskNode)
-	// println(cuts.taskNodesAbove)
-	for (taskNode <- cuts.taskNodesAbove)
-		println("A: " + taskNode)
-	for (taskNode <- cuts.taskNodesBelow)
-		println("B: " + taskNode)
+//   def minSplit() {
+//   	for ((key,taskNode) <- taskNodes)
+//   	taskNode.status = 0
+//   	val cuts: RecusiveStructure = this.getMinCutOfNode(ROOT_NODE_ID)
+//   	println()
+//   	if (cuts.childCutList.isEmpty) {
+//   		println("SOMTHING WRONG")
+//   	}
+//   	for (cut <- cuts.childCutList)
+//   	println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
+//   	println()
 
-  }
+// 	// for (taskNode <- taskNodes)
+// 		// println(taskNode)
+// 	// println(cuts.taskNodesAbove)
+// 	for (taskNode <- cuts.taskNodesAbove)
+// 	println("A: " + taskNode)
+// 	for (taskNode <- cuts.taskNodesBelow)
+// 	println("B: " + taskNode)
 
-  def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
-  	val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
-  	val toReturn: RecusiveStructure = new RecusiveStructure()
-  	toReturn.taskNodesAbove += parentTaskId -> parentTaskNode
+// }
 
-  	for (childTaskId <- parentTaskNode.childTaskIds) {
-  		val childtaskNode: TaskNode = taskNodes.get(childTaskId).get
-  		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
+// used for a recursive traversal of the graph that determines where cuts will be made
+def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
+	val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+	val toReturn: RecusiveStructure = new RecusiveStructure()
+	toReturn.taskNodesAbove += parentTaskId -> parentTaskNode
+
+	for (childTaskId <- parentTaskNode.childTaskIds) {
+		val childtaskNode: TaskNode = taskNodes.get(childTaskId).get
+		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
 
   		// handle if the node has been visited
   		if (childtaskNode.status == 2) { // edge in was cut before cut this edge 
@@ -323,23 +324,23 @@ class TaskGraph() {
   			// do nothing, do not recurse, do not cut
   		}
   		else if (childtaskNode.status == 0) { // first visit to node perform recusion
-			val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)			
-			var childEdgeListSum: Double = 0
-	  		childRS.childCutList.foreach(childEdgeListSum += _._3)
+  			val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)			
+  			var childEdgeListSum: Double = 0
+  			childRS.childCutList.foreach(childEdgeListSum += _._3)
 
-		  	val allMemIntoChild: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
-	  		val memIntoChildFromOtherParents = allMemIntoChild - memFromParentToChild
+  			val allMemIntoChild: Long = taskNodes.get(childTaskId).get.sumOfBytesIn
+  			val memIntoChildFromOtherParents = allMemIntoChild - memFromParentToChild
 	  		// println("\tmem from: " + parentTaskId + " to " + childTaskId + " = " + memFromParentToChild)
 
 
 	  		if ( childTaskId != END_NODE_ID &&
 	  			allMemIntoChild + childRS.otherInputs > childEdgeListSum) {// put prefrence on cutting lower in the graph
 		  		// println("\tchosing cuts beyond: " + parentTaskId + " to " + childTaskId + " (" + allMemIntoChild + " vs " + childEdgeListSum + ")")
-  				toReturn.childCutList ++= childRS.childCutList
-  				toReturn.otherInputs += memIntoChildFromOtherParents
-  				childtaskNode.status == 1
-	  		}
-	  		else {
+		  		toReturn.childCutList ++= childRS.childCutList
+		  		toReturn.otherInputs += memIntoChildFromOtherParents
+		  		childtaskNode.status == 1
+		  	}
+		  	else {
 	  			// println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue allMemIntoChild (" + allMemIntoChild + ") < childEdgeListSum " + childEdgeListSum)
 	  			toReturn.childCutList += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
 	  			childtaskNode.status = 2
@@ -347,14 +348,14 @@ class TaskGraph() {
 	  			toReturn.taskNodesBelow += childTaskId -> childtaskNode
 	  		}
 	  		toReturn.taskNodesBelow ++= childRS.taskNodesBelow
-			toReturn.taskNodesAbove ++= childRS.taskNodesAbove
+	  		toReturn.taskNodesAbove ++= childRS.taskNodesAbove
 	  	}
 
 	  	if (childtaskNode.status == 2)
-  			toReturn.taskNodesAbove.get(parentTaskId).get.removeChild(childTaskId)
+	  	toReturn.taskNodesAbove.get(parentTaskId).get.removeChild(childTaskId)
 	  }
-	return toReturn
-  }
+	  return toReturn
+	}
 
   // calculates the memory passed between executors
   // does not include root to first generation tasks and result task to end task mem movement
@@ -362,45 +363,54 @@ class TaskGraph() {
   def getMemTransferBetweenExecutors() {
   	for ((k,v) <- taskNodes)
   		v.status = 0 // indicated not visited
-  	var status: Int = 0 // 0 not visited, 1 kept, 2 cut
 	/* perform a dfs 
 	 * if the child node does not have the same executor then add the mem sent to cross bandwidth
 	 */
-    val stack: Stack[Long] = new Stack[Long]()
-    var memTransfer: Double = 0
+	 val stack: Stack[Long] = new Stack[Long]()
+	 var memTransfer: Double = 0
 
-    stack.push(ROOT_NODE_ID)
+	 stack.push(ROOT_NODE_ID)
 
-    while (!stack.isEmpty) {
-    	val parentTaskId: Long = stack.pop
-	    val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
+	 while (!stack.isEmpty) {
+	 	val parentTaskId: Long = stack.pop
+	 	val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
 	    parentTaskNode.status = 1 // indicate visited so that we do recuse multiple times down
-    	for (childTaskId <- parentTaskNode.childTaskIds) {
-    		if (childTaskId != END_NODE_ID) {
-    			val childTaskNode: TaskNode = taskNodes.get(childTaskId).get
-    			if (childTaskNode.status == 0)
-    				stack.push(childTaskId)
-    			if (parentTaskId != ROOT_NODE_ID && 
-    				childTaskNode.executorId != parentTaskNode.executorId) {
-    				println("\tadding " + parentTaskId + " to " + childTaskId)
-    				memTransfer += getMemFromParentToChild(parentTaskId, childTaskId)
-    			}
+	    for (childTaskId <- parentTaskNode.childTaskIds) {
+	    	if (childTaskId != END_NODE_ID) {
+	    		val childTaskNode: TaskNode = taskNodes.get(childTaskId).get
+	    		if (childTaskNode.status == 0)
+	    		stack.push(childTaskId)
+	    		if (parentTaskId != ROOT_NODE_ID && 
+	    			childTaskNode.executorId != parentTaskNode.executorId) {
+	    			println("\tadding " + parentTaskId + " to " + childTaskId)
+	    			memTransfer += getMemFromParentToChild(parentTaskId, childTaskId)
+	    		}
 	    	}
 	    }
-    }  	
-    println("memTransfer == " + memTransfer)
-  }
+	}  	
+	println("memTransfer == " + memTransfer)
+}
 
-  def getTaskId(task: Task[_]): Long = {
-  	val stageTasks: Array[Long] = stageIdToTasks.get(task.stageId).get.toArray
-  	return stageTasks(task.partitionId)
-  }
+// returns the taskId for this task
+// ONLY WORKS after graph completeion
+def getTaskId(task: Task[_]): Long = {
+	val stageTasks: Array[Long] = stageIdToTasks.get(task.stageId).get.toArray
+	return stageTasks(task.partitionId)
+}
 
-  def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
-  	println("\tChecking if executor (" + execId + ") and task (" + taskId + ") align for DC")
-  	return true
+// decides whether this task should be used or not
+def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
+	println("\tChecking if executor (" + execId + ") and task (" + taskId + ") align for DC")
+	if ( !selectedExecutor.contains(taskId) ) // first run no tasks selected for executors
+		return true
+	else if ( selectedExecutor.get(taskId).get == execId) // matches selected executor 
+		return true
+	else
+		return false
+}
 
-  def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
+// adds a hash to a TaskGraph
+def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
   	// add the nodes
   	taskNodes ++= premadeHash
   	// get the min and max stages
@@ -408,45 +418,81 @@ class TaskGraph() {
   	var max: Int = Int.MinValue
   	for ((key, taskNode) <- premadeHash) {
   		if (taskNode.stageId < min)
-  			min = taskNode.stageId
+  		min = taskNode.stageId
   		if (taskNode.stageId > max)
-  			max = taskNode.stageId
+  		max = taskNode.stageId
   	}
   	// attach root to all task of min stage
   	// and end to all task of max stage
   	for ((taskId, taskNode) <- taskNodes) {
   		if (taskNode.stageId == min)
-  			taskNodes.get(ROOT_NODE_ID).get.addChild(taskId)
+  		taskNodes.get(ROOT_NODE_ID).get.addChild(taskId)
   		if (taskNode.stageId == max)
-  			taskNode.addChild(END_NODE_ID)
+  		taskNode.addChild(END_NODE_ID)
   	}
 
   }
-  def taskGraphOrdering(theTaskGraph: TaskGraph): Int = theTaskGraph.taskNodes.size
-  def min_k_cut(numberOfSplits: Int): TreeSet[(Long,Long,Long)] = {
-    val allCuts: TreeSet[(Long,Long,Long)] = new TreeSet[(Long,Long,Long)]()
 
+  def taskGraphOrdering(theTaskGraph: TaskGraph): Int = theTaskGraph.taskNodes.size
+  
+  // returns a list of all the individual graphs
+  // prints a set of edges in the form of (parentTaskId, childTaskId, weight)
+  // these split the graph numberOfSplits times into numberOfSplits+1 seperate graphs
+  // cuts the graph then puts the splits into a PQ based on graph size
+  // continues until it reachs desired amount of partitions
+  def min_k_cut(numberOfSplits: Int): ListBuffer[TaskGraph] = {
+  	for ((k,v) <- taskNodes)
+		v.status = 0 // indicated not visited
+  	val allCuts: TreeSet[(Long,Long,Long)] = new TreeSet[(Long,Long,Long)]()
+  	val subGraphs: ListBuffer[TaskGraph] = new ListBuffer[TaskGraph]()
+  	subGraphs += this
   	val queueToCut: PriorityQueue[TaskGraph] = new PriorityQueue[TaskGraph]()(Ordering.by(taskGraphOrdering))
   	queueToCut += this
-    for (i <- 0 until numberOfSplits) {
-	    val cuts: RecusiveStructure = queueToCut.dequeue.getMinCutOfNode(ROOT_NODE_ID)
-	    allCuts ++= cuts.childCutList
-	    val taskGraphAbove: TaskGraph = new TaskGraph()
-	    cuts.taskNodesAbove -= ROOT_NODE_ID
-	    taskGraphAbove.usePremadeHash(cuts.taskNodesAbove)
-	    queueToCut += taskGraphAbove
-	    
-	    val taskGraphBelow: TaskGraph = new TaskGraph()
-	    cuts.taskNodesBelow -= END_NODE_ID
-	    taskGraphBelow.usePremadeHash(cuts.taskNodesBelow)
-	    queueToCut += taskGraphBelow
-	}
 
-	for (cut <- allCuts)
-		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
-	return allCuts
+  	for (i <- 0 until numberOfSplits) {
+  		val graphToCut: TaskGraph = queueToCut.dequeue
+  		subGraphs -= graphToCut
+  		val cuts: RecusiveStructure = graphToCut.getMinCutOfNode(ROOT_NODE_ID)
+
+  		allCuts ++= cuts.childCutList
+  		val taskGraphAbove: TaskGraph = new TaskGraph()
+  		cuts.taskNodesAbove -= ROOT_NODE_ID
+  		taskGraphAbove.usePremadeHash(cuts.taskNodesAbove)
+  		queueToCut += taskGraphAbove
+  		subGraphs += taskGraphAbove
+
+  		val taskGraphBelow: TaskGraph = new TaskGraph()
+  		cuts.taskNodesBelow -= END_NODE_ID
+  		taskGraphBelow.usePremadeHash(cuts.taskNodesBelow)
+  		queueToCut += taskGraphBelow
+  		subGraphs += taskGraphBelow
+  	}
+
+  	for (cut <- allCuts)
+  		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
+  	return subGraphs
   } 
-  // prints the dfs seach from the new root of each parition
+
+  val selectedExecutor: HashMap[Long, String] = new HashMap[Long, String]()
+  
+  def prepareForSecondRun(/* NUMBER OF EXECUTORS */) {
+
+  	val numberOfExecutors: Int = 2
+  	val splitGraphs: ListBuffer[TaskGraph] = min_k_cut(numberOfExecutors-1)
+  	val jobOffset: Int = taskNodes.size-2 // b/c of root and end nodes
+
+  	for (i <- 0 until numberOfExecutors) {
+  		// println(splitGraphs(i))
+  		for ((k,v) <- splitGraphs(i).taskNodes) {
+  			if (k != ROOT_NODE_ID && k != END_NODE_ID)
+  				selectedExecutor += (k+jobOffset) -> i.toString
+  		}
+  	}
+
+  	println(selectedExecutor)
+  }
+
+
 }
 
 class RecusiveStructure() {
