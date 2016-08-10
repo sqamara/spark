@@ -623,6 +623,7 @@ class DAGScheduler(
       	// taskGraph.dfs()
       	// taskGraph.printTaskDataDependencies()
       	// taskGraph.minSplit()
+		taskGraph.min_k_cut(2)
 
       case JobFailed(exception: Exception) =>
         logInfo("Job %d failed: %s, took %f s".format

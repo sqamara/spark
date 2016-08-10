@@ -2,6 +2,7 @@ package org.apache.spark.scheduler
 
 import scala.collection.mutable.TreeSet // used to hold sorted Id's
 import scala.collection.mutable.Stack // used for dfs
+import scala.collection.mutable.PriorityQueue
 import scala.collection.mutable.HashMap 
 import scala.collection.mutable.ListBuffer
 
@@ -22,6 +23,7 @@ class TaskNode(
 	// a string to indicate the executor
 	var executorId: String = "NOT SET"
 	var status: Int = 0 // 0 not visited, 1 kept, 2 cut
+	
 	def addChild(childTaskId: Long) {
 		childTaskIds += childTaskId
 	}
@@ -80,7 +82,6 @@ class TaskGraph() {
   // Root and End nodes are used for min k cut 
   taskNodes += ROOT_NODE_ID -> new RootTaskNode() // start node
   taskNodes += END_NODE_ID -> new TaskNode(END_NODE_ID, -1, -1, 0, new Array[Long](0)) // end node
-
 
   // populates stageIdToTasks HashMap, called at task completetion
   def addTaskToHash(taskId: Long, stageId: Int) {  
@@ -196,6 +197,8 @@ class TaskGraph() {
   		return 0
   	else if (parent == ROOT_NODE_ID)
   		return taskNodes.get(child).get.outputForPartition.sum
+  	else if (child == END_NODE_ID)
+  		return Long.MaxValue
   	return taskNodes.get(parent).get.getOutputForPartition( taskNodes.get(child).get.partitionId )
   }
   // loging tool to show how much memory is moved between each and every tasks with dep
@@ -292,14 +295,23 @@ class TaskGraph() {
 	for (cut <- cuts.childCutList)
 		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
 	println()
+	
+	// for (taskNode <- taskNodes)
+		// println(taskNode)
+	// println(cuts.taskNodesAbove)
+	for (taskNode <- cuts.taskNodesAbove)
+		println("A: " + taskNode)
+	for (taskNode <- cuts.taskNodesBelow)
+		println("B: " + taskNode)
+
   }
 
   def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
-  	
-  	val parentTask: TaskNode = taskNodes.get(parentTaskId).get
+  	val parentTaskNode: TaskNode = taskNodes.get(parentTaskId).get
   	val toReturn: RecusiveStructure = new RecusiveStructure()
-  	
-  	for (childTaskId <- parentTask.childTaskIds) {
+  	toReturn.taskNodesAbove += parentTaskId -> parentTaskNode
+
+  	for (childTaskId <- parentTaskNode.childTaskIds) {
   		val childtaskNode: TaskNode = taskNodes.get(childTaskId).get
   		val memFromParentToChild: Long = getMemFromParentToChild(parentTaskId, childTaskId)
 
@@ -311,7 +323,7 @@ class TaskGraph() {
   			// do nothing, do not recurse, do not cut
   		}
   		else if (childtaskNode.status == 0) { // first visit to node perform recusion
-			val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)
+			val childRS: RecusiveStructure = getMinCutOfNode(childTaskId)			
 			var childEdgeListSum: Double = 0
 	  		childRS.childCutList.foreach(childEdgeListSum += _._3)
 
@@ -331,8 +343,15 @@ class TaskGraph() {
 	  			// println("\t\tchoosing cut at: " + parentTaskId + " to " + childTaskId + " becaue allMemIntoChild (" + allMemIntoChild + ") < childEdgeListSum " + childEdgeListSum)
 	  			toReturn.childCutList += new Tuple3(parentTaskId, childTaskId, memFromParentToChild)
 	  			childtaskNode.status = 2
+	  			childRS.taskNodesAbove -= childTaskId
+	  			toReturn.taskNodesBelow += childTaskId -> childtaskNode
 	  		}
+	  		toReturn.taskNodesBelow ++= childRS.taskNodesBelow
+			toReturn.taskNodesAbove ++= childRS.taskNodesAbove
 	  	}
+
+	  	if (childtaskNode.status == 2)
+  			toReturn.taskNodesAbove.get(parentTaskId).get.removeChild(childTaskId)
 	  }
 	return toReturn
   }
@@ -380,10 +399,59 @@ class TaskGraph() {
   def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
   	println("\tChecking if executor (" + execId + ") and task (" + taskId + ") align for DC")
   	return true
+
+  def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
+  	// add the nodes
+  	taskNodes ++= premadeHash
+  	// get the min and max stages
+  	var min: Int = Int.MaxValue
+  	var max: Int = Int.MinValue
+  	for ((key, taskNode) <- premadeHash) {
+  		if (taskNode.stageId < min)
+  			min = taskNode.stageId
+  		if (taskNode.stageId > max)
+  			max = taskNode.stageId
+  	}
+  	// attach root to all task of min stage
+  	// and end to all task of max stage
+  	for ((taskId, taskNode) <- taskNodes) {
+  		if (taskNode.stageId == min)
+  			taskNodes.get(ROOT_NODE_ID).get.addChild(taskId)
+  		if (taskNode.stageId == max)
+  			taskNode.addChild(END_NODE_ID)
+  	}
+
+  }
+  def taskGraphOrdering(theTaskGraph: TaskGraph): Int = theTaskGraph.taskNodes.size
+  def min_k_cut(numberOfSplits: Int): TreeSet[(Long,Long,Long)] = {
+    val allCuts: TreeSet[(Long,Long,Long)] = new TreeSet[(Long,Long,Long)]()
+
+  	val queueToCut: PriorityQueue[TaskGraph] = new PriorityQueue[TaskGraph]()(Ordering.by(taskGraphOrdering))
+  	queueToCut += this
+    for (i <- 0 until numberOfSplits) {
+	    val cuts: RecusiveStructure = queueToCut.dequeue.getMinCutOfNode(ROOT_NODE_ID)
+	    allCuts ++= cuts.childCutList
+	    val taskGraphAbove: TaskGraph = new TaskGraph()
+	    cuts.taskNodesAbove -= ROOT_NODE_ID
+	    taskGraphAbove.usePremadeHash(cuts.taskNodesAbove)
+	    queueToCut += taskGraphAbove
+	    
+	    val taskGraphBelow: TaskGraph = new TaskGraph()
+	    cuts.taskNodesBelow -= END_NODE_ID
+	    taskGraphBelow.usePremadeHash(cuts.taskNodesBelow)
+	    queueToCut += taskGraphBelow
+	}
+
+	for (cut <- allCuts)
+		println ("cut " + cut._1 + " to " + cut._2 + " (" + cut._3 + ")")
+	return allCuts
   } 
+  // prints the dfs seach from the new root of each parition
 }
 
 class RecusiveStructure() {
 	val childCutList: TreeSet[(Long,Long,Long)] = new TreeSet[(Long,Long,Long)]()
 	var otherInputs: Long = 0
+	val taskNodesAbove: HashMap[Long, TaskNode] = new HashMap[Long, TaskNode]()
+	val taskNodesBelow: HashMap[Long, TaskNode] = new HashMap[Long, TaskNode]()
 }
