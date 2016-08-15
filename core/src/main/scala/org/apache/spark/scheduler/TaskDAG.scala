@@ -10,11 +10,11 @@ import scala.collection.mutable.ListBuffer
 // if each node were to hold its child then on would access the taskNodes hashmap each time a new node is made
 // this may be better
 class TaskNode(
-	val taskId: Long,
-	val stageId: Int,
-	val firstJobId: Int,
-	val partitionId: Int,
-	val outputForPartition: Array[Long]
+	var taskId: Long,
+	var stageId: Int,
+	var firstJobId: Int,
+	var partitionId: Int,
+	var outputForPartition: Array[Long]
 	) 
 {
 	var sumOfBytesIn: Long = 0
@@ -33,7 +33,18 @@ class TaskNode(
 
 	def getOutputForPartition(index: Int): Long = outputForPartition(index)
 	def getOutputForPartitionSize(): Int = outputForPartition.length
-
+	def makeCopyOf(taskNode: TaskNode){
+		taskId             = taskNode.taskId               
+		stageId            = taskNode.stageId                 
+		firstJobId         = taskNode.firstJobId               
+		partitionId        = taskNode.partitionId                
+		outputForPartition = taskNode.outputForPartition 
+		sumOfBytesIn       = taskNode.sumOfBytesIn           
+		for (childTaskId <- taskNode.childTaskIds)
+			childTaskIds += childTaskId        
+		executorId         = taskNode.executorId         
+		status             = taskNode.status             
+	}
 
 	override def toString(): String = {
 		var toReturn: String = ""
@@ -350,9 +361,9 @@ def getMinCutOfNode(parentTaskId: Long): RecusiveStructure = {
 	  		toReturn.taskNodesBelow ++= childRS.taskNodesBelow
 	  		toReturn.taskNodesAbove ++= childRS.taskNodesAbove
 	  	}
-
-	  	if (childtaskNode.status == 2)
-	  	toReturn.taskNodesAbove.get(parentTaskId).get.removeChild(childTaskId)
+	  	// remove edge between parent and child // we dont want to do this because this destroys our graph
+	  	// if (childtaskNode.status == 2)
+	  	// 	toReturn.taskNodesAbove.get(parentTaskId).get.removeChild(childTaskId)
 	  }
 	  return toReturn
 	}
@@ -399,11 +410,13 @@ def getTaskId(task: Task[_]): Long = {
 }
 
 // decides whether this task should be used or not
-def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
-	println("\tChecking if executor (" + execId + ") and task (" + taskId + ") align for DC")
-	if ( !selectedExecutor.contains(taskId) ) // first run no tasks selected for executors
-		return true
-	else if ( selectedExecutor.get(taskId).get == execId) // matches selected executor 
+def taskIsForThisExecutor(execId: String, stageId: Int, index: Int): Boolean = {
+	println("\tChecking if executor (" + execId + ") and stage " + stageId + " index " + index + ") align")
+	if ( !selectedExecutor.contains(stageId) ) // does not contains stage therefore first run
+		return true 
+	else if ( !selectedExecutor.get(stageId).get.contains(index) ) // contains stage but not task therefore first run
+		return true 
+	if ( selectedExecutor.get(stageId).get.get(index).get == execId) // matches selected executor 
 		return true
 	else
 		return false
@@ -412,7 +425,11 @@ def taskIsForThisDC(execId: String , taskId: Long): Boolean = {
 // adds a hash to a TaskGraph
 def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
   	// add the nodes
-  	taskNodes ++= premadeHash
+  	for ((k, task) <- premadeHash) {
+  		val newTaskNode: TaskNode = new TaskNode(0,0,0,0,new Array[Long](0))
+  		newTaskNode.makeCopyOf(task)
+  		taskNodes += k -> newTaskNode
+  	}
   	// get the min and max stages
   	var min: Int = Int.MaxValue
   	var max: Int = Int.MinValue
@@ -426,9 +443,9 @@ def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
   	// and end to all task of max stage
   	for ((taskId, taskNode) <- taskNodes) {
   		if (taskNode.stageId == min)
-  		taskNodes.get(ROOT_NODE_ID).get.addChild(taskId)
+  			taskNodes.get(ROOT_NODE_ID).get.addChild(taskId)
   		if (taskNode.stageId == max)
-  		taskNode.addChild(END_NODE_ID)
+  			taskNode.addChild(END_NODE_ID)
   	}
 
   }
@@ -473,19 +490,27 @@ def usePremadeHash(premadeHash: HashMap[Long, TaskNode]) {
   	return subGraphs
   } 
 
-  val selectedExecutor: HashMap[Long, String] = new HashMap[Long, String]()
+  val selectedExecutor: HashMap[Int, HashMap[Int, String]] = new HashMap[Int, HashMap[Int, String]]()
   
   def prepareForSecondRun(/* NUMBER OF EXECUTORS */) {
 
   	val numberOfExecutors: Int = 2
   	val splitGraphs: ListBuffer[TaskGraph] = min_k_cut(numberOfExecutors-1)
-  	val jobOffset: Int = taskNodes.size-2 // b/c of root and end nodes
+  	// val jobOffset: Int = taskNodes.size-2 // b/c of root and end nodes
+  	val stageOffset: Int = stageIdToTasks.size
 
   	for (i <- 0 until numberOfExecutors) {
   		// println(splitGraphs(i))
   		for ((k,v) <- splitGraphs(i).taskNodes) {
-  			if (k != ROOT_NODE_ID && k != END_NODE_ID)
-  				selectedExecutor += (k+jobOffset) -> i.toString
+  			if (k != ROOT_NODE_ID && k != END_NODE_ID) {
+  				val nextStageId = stageOffset + v.stageId
+	  			if (selectedExecutor.contains(nextStageId))
+			  		selectedExecutor.get(nextStageId).get += v.partitionId -> i.toString
+			  	else {
+			  		selectedExecutor += nextStageId -> HashMap[Int, String]()
+			  		selectedExecutor.get(nextStageId).get += v.partitionId -> i.toString
+			  	}
+  			}
   		}
   	}
 

@@ -255,7 +255,7 @@ private[spark] class TaskSetManager(
       indexOffset -= 1
       val index = list(indexOffset)
       if (!executorIsBlacklisted(execId, index) &&
-          sched.dagScheduler.taskGraph.taskIsForThisDC(execId, index /*TODO REPLACE THIS WITH TASKID*/) ) {
+          sched.dagScheduler.taskGraph.taskIsForThisExecutor(execId, stageId, index) ) {
           sched.dagScheduler.taskGraph.taskToExecutor += tasks(index) -> execId
 
         // This should almost always be list.trimEnd(1) to remove tail
