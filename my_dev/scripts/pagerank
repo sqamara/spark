@@ -1,0 +1,12 @@
+for ((i=0;i<10;i++))
+do
+$SPARK_HOME/bin/spark-submit --master spark://SMBP:7077 \
+    $SPARK_HOME/my_dev/test/PageRank/target/scala-2.10/page-rank-project_2.10-1.0.jar \
+    $SPARK_HOME/my_dev/test/PageRank/pagerank_data.txt \
+    | grep "memTransfer == " |  cut -c 16- >> output
+done
+
+awk 'NR%2==1' output > output_norm
+awk 'NR%2==0' output > output_chos
+
+rm output
